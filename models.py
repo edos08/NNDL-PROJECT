@@ -215,11 +215,11 @@ class ResNet(nn.Module):
         
 # from https://github.com/facebookarchive/fb.resnet.torch/blob/master/models/resnet.lua
 resnet_cfg = {
-    "ResNet18" : {"block" : BasicBlock, "layers" : [2, 2, 2, 2]},
-    "ResNet34" : {"block" : BasicBlock, "layers" : [3, 4, 6, 3]},
-    "ResNet50" : {"block" : BottleneckBlock, "layers" : [3, 4, 6, 3]},
-    "ResNet101" : {"block" : BottleneckBlock, "layers" : [3, 4, 23, 3]},
-    "ResNet152" : {"block" : BottleneckBlock, "layers" : [3, 8, 36, 3]},
+    "resnet18" : {"block" : BasicBlock, "layers" : [2, 2, 2, 2]},
+    "resnet34" : {"block" : BasicBlock, "layers" : [3, 4, 6, 3]},
+    "resnet50" : {"block" : BottleneckBlock, "layers" : [3, 4, 6, 3]},
+    "resnet101" : {"block" : BottleneckBlock, "layers" : [3, 4, 23, 3]},
+    "resnet152" : {"block" : BottleneckBlock, "layers" : [3, 8, 36, 3]},
 }
 
 # example init: 
