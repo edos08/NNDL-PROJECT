@@ -286,7 +286,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
 
 
 def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, device,
-             pbar: tqdm = None) -> (list, list):
+             pbar: tqdm = None) -> (float, float):
     """
     Valid a model on the provided validation dataset
 
