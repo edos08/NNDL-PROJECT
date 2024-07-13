@@ -247,7 +247,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     epoch_loss = list()
     pred_list, label_list = np.array([]), np.array([])
 
-    for batch in train_loader:
+    for batch in tqdm(train_loader):
         image, label = batch
 
         # GPU casting
@@ -306,7 +306,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
     pred_list, label_list = np.array([]), np.array([])
 
     with torch.no_grad():
-        for batch in validation_loader:
+        for batch in tqdm(validation_loader):
             image, label = batch
 
             # Casting to GPU

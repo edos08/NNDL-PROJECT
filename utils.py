@@ -7,8 +7,12 @@ import numpy as np
 import cv2 as cv
 import seaborn as sns
 
-from torch.utils.data import Dataset
-from torch.utils.data import DataLoader
+import torch
+import torchvision
+from torch.utils.data import DataLoader, Dataset, Subset
+from torchvision.transforms.functional import to_tensor
+from sklearn.model_selection import train_test_split
+from tqdm import tqdm
 
 
 def show_images_with_text(images: list, labels: list = None, title: str = None, figsize: tuple = None):
@@ -109,18 +113,48 @@ def show_plot(signals: list, title: str, x_label: str, y_label: str, x_range: li
     plt.show()
 
 
-def compute_mean_std(loader: DataLoader) -> tuple:
+def compute_mean_std_from_dataset(data: Dataset) -> tuple:
+# see https://gist.github.com/spirosdim/79fc88231fffec347f1ad5d14a36b5a8
     """
     Compute the mean and standard deviation from a list of images
+    We assume that the images of the dataloader have the same height and width
+    
+    Args:
+        data (Dataset): Dataset from which to compute the mean and standard deviation
+    """
+    channels_sum, channels_sqrd_sum =  torch.zeros(3), torch.zeros(3)
+    num_batches = 0 
 
+    for image, _ in tqdm(data): # shape of images: [c,w,h]
+        image = to_tensor(image)
+        channels_sum += torch.mean(image, dim=[1,2])
+        channels_sqrd_sum += torch.mean(image ** 2, dim=[1, 2])
+        num_batches += 1
+
+    mean = channels_sum / num_batches
+    std = torch.sqrt(channels_sqrd_sum / num_batches - mean ** 2)
+
+    return mean, std
+
+def compute_mean_std(loader: DataLoader) -> tuple:
+# see https://gist.github.com/spirosdim/79fc88231fffec347f1ad5d14a36b5a8
+    """
+    Compute the mean and standard deviation from a list of images
+    We assume that the images of the dataloader have the same height and width
+    
     Args:
         loader (DataLoader): Dataset loader to compute the mean and standard deviation
     """
+    channels_sum, channels_sqrd_sum =  torch.zeros(3), torch.zeros(3)
+    num_batches = 0 
 
-    images, _ = next(iter(loader))
+    for batch_images, _ in tqdm(loader): # shape of images: [b,c,w,h]
+        channels_sum += torch.mean(batch_images, dim=[0,2,3])
+        channels_sqrd_sum += torch.mean(batch_images ** 2, dim=[0, 1, 2])
+        num_batches += 1
 
-    # shape of images = [b,c,w,h]
-    mean, std = images.mean([0, 2, 3]), images.std([0, 2, 3])
+    mean = channels_sum / num_batches
+    std = torch.sqrt(channels_sqrd_sum / num_batches - mean ** 2)
 
     return mean, std
 
@@ -150,6 +184,21 @@ def compute_mean_std_from_images(images: list) -> tuple:
 
     return mean, std
 
+def train_val_dataset(dataset: Dataset, val_split: float=0.2) -> tuple:
+    train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
+    datasets = {}
+    datasets['train'] = Subset(dataset, train_idx)
+    datasets['val'] = Subset(dataset, val_idx)
+    return datasets
+
+
+def show_grid(images, labels):
+    out = torchvision.utils.make_grid(images)
+    npimg = out.numpy()
+    np.clip(npimg, 0, 1)
+    plt.imshow(np.transpose(npimg, (1, 2, 0)))
+    plt.show()
+    print(' '.join(f'{label_dict[labels[j].item()]}' for j in range(len(labels))))
 
 def read_images(path: str) -> list:
     """
