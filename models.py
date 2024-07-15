@@ -5,7 +5,7 @@ import numpy as np
 import torch.nn as nn
 
 from torch.utils.data import DataLoader
-from sklearn.metrics import accuracy_score
+# from sklearn.metrics import accuracy_score # using custom score function
 from tqdm.notebook import tqdm
 
 
@@ -225,6 +225,13 @@ resnet_cfg = {
 # example init: 
 #   resnet50 = ResNet(resnet_cfg["ResNet50"]["block"], resnet_cfg["ResNet50"]["layers"], num_classes=10)
 
+def top_k_accuracy(target, predicted, k=5):
+    with torch.no_grad():
+        max_k_preds = predicted.topk(k, dim=1)[1]
+        correct = max_k_preds.eq(target.view(-1, 1).expand_as(max_k_preds))
+        top_k_acc = correct.sum().float().item() / target.size(0)
+
+    return top_k_acc
 
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
           device, pbar: tqdm = None) -> tuple:
@@ -244,8 +251,8 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     model.train()
     start = time.time()
 
-    epoch_loss = list()
-    pred_list, label_list = np.array([]), np.array([])
+    epoch_loss = np.array([])
+    epoch_acc, epoch_top5_acc = np.array([]), np.array([])
 
     for batch in train_loader:
         image, label = batch
@@ -257,11 +264,14 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
         # Forward step
         pred_label = model(image)
         loss = criterion(pred_label, label)
-        epoch_loss.append(loss.cpu().data)
+        epoch_loss = np.append(epoch_loss, loss.cpu().data)
 
-        _, predicted = torch.max(pred_label, dim=1)
-        pred_list = np.append(pred_list, predicted.cpu().numpy())
-        label_list = np.append(label_list, label.cpu().numpy())
+        # Accuracy
+        batch_acc = top_k_accuracy(label, pred_label, k=1)
+        batch_top5_acc = top_k_accuracy(label, pred_label, k=5)
+
+        epoch_acc = np.append(epoch_acc, batch_acc)
+        epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -271,18 +281,22 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
         if pbar is not None:
            pbar.update(1)
 
-    epoch_loss = np.asarray(epoch_loss)
-    epoch_acc = accuracy_score(label_list, pred_list)
+    epoch_loss_mean = epoch_loss.mean()
+    epoch_loss_std = epoch_loss.std()
+    epoch_acc = epoch_acc.mean()
+    epoch_top5_acc = epoch_top5_acc.mean()
+
     end = time.time()
 
     print("\n-- TRAINING --")
-    print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Accuracy: {:.2f}\n - Time: {:.2f}s".format(epoch + 1,
-                                                                                               epoch_loss.mean(),
-                                                                                               epoch_loss.std(),
-                                                                                               epoch_acc,
-                                                                                               end - start))
+    print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(epoch + 1,
+                                                                                                                                epoch_loss_mean,
+                                                                                                                                epoch_loss_std,
+                                                                                                                                epoch_acc,
+                                                                                                                                epoch_top5_acc,
+                                                                                                                                end - start))
 
-    return epoch_loss.mean(), epoch_acc
+    return epoch_loss_mean, epoch_acc, epoch_top5_acc
 
 
 def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, device,
@@ -302,8 +316,8 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
     model.eval()
     start = time.time()
 
-    epoch_loss = list()
-    pred_list, label_list = np.array([]), np.array([])
+    epoch_loss = np.array([])
+    epoch_acc, epoch_top5_acc = np.array([]), np.array([])
 
     with torch.no_grad():
         for batch in validation_loader:
@@ -316,27 +330,34 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
             # Forward step
             pred_label = model(image)
             loss = criterion(pred_label, label)
-            epoch_loss.append(loss.cpu().data)
+            epoch_loss = np.append(epoch_loss, loss.cpu().data)
 
-            _, predicted = torch.max(pred_label, dim=1)
-            pred_list = np.append(pred_list, predicted.cpu().numpy())
-            label_list = np.append(label_list, label.cpu().numpy())
+            # Accuracy
+            batch_acc = top_k_accuracy(label, pred_label, k=1)
+            batch_top5_acc = top_k_accuracy(label, pred_label, k=5)
 
+            epoch_acc = np.append(epoch_acc, batch_acc)
+            epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
+            
             if pbar is not None:
                pbar.update(1)
 
-        epoch_loss = np.asarray(epoch_loss)
-        epoch_acc = accuracy_score(label_list, pred_list)
+        epoch_loss_mean = epoch_loss.mean()
+        epoch_loss_std = epoch_loss.std()
+        epoch_acc = epoch_acc.mean()
+        epoch_top5_acc = epoch_top5_acc.mean()
+        
         end = time.time()
 
         print("\n-- VALIDATION --")
-        print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Accuracy: {:.2f}\n - Time: {:.2f}s".format(epoch + 1,
-                                                                                                   epoch_loss.mean(),
-                                                                                                   epoch_loss.std(),
-                                                                                                   epoch_acc,
-                                                                                                   end - start))
+        print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(epoch + 1,
+                                                                                                                                    epoch_loss_mean,
+                                                                                                                                    epoch_loss_std,
+                                                                                                                                    epoch_acc,
+                                                                                                                                    epoch_top5_acc,
+                                                                                                                                    end - start))
 
-        return epoch_loss.mean(), epoch_acc
+        return epoch_loss.mean(), epoch_acc, epoch_top5_acc
 
 
 def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, device) -> tuple:
@@ -352,8 +373,8 @@ def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, 
     model.eval()
     start = time.time()
 
-    losses = list()
-    pred_list, label_list = np.array([]), np.array([])
+    losses = np.array([])
+    acc, top5_acc = np.array([]), np.array([])
 
     with torch.no_grad():
         for batch in test_loader:
@@ -366,20 +387,26 @@ def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, 
             # Forward step
             pred_label = model(image)
             loss = criterion(pred_label, label)
-            losses.append(loss.cpu().data)
+            losses = np.append(losses, loss.cpu().data)
 
-            _, predicted = torch.max(pred_label, dim=1)
-            pred_list = np.append(pred_list, predicted.cpu().numpy())
-            label_list = np.append(label_list, label.cpu().numpy())
+            batch_acc = top_k_accuracy(label, pred_label, k=1)
+            batch_top5_acc = top_k_accuracy(label, pred_label, k=5)
 
-        losses = np.asarray(losses)
-        accuracy = accuracy_score(label_list, pred_list)
+            acc = np.append(acc, batch_acc)
+            top5_acc = np.append(top5_acc, batch_top5_acc)
+
+        losses_mean = losses.mean()
+        losses_std = losses.std()
+        acc = acc.mean()
+        top5_acc = top5_acc.mean()
+
         end = time.time()
 
         print("\n-- TEST --")
-        print("Test results:\n - Loss: {:.3f} +- {:.3f}\n - Accuracy: {:.2f}\n - Time: {:.2f}s".format(losses.mean(),
-                                                                                                       losses.std(),
-                                                                                                       accuracy,
-                                                                                                       end - start))
+        print("Test results:\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(losses_mean,
+                                                                                                                                        losses_std,
+                                                                                                                                        acc,
+                                                                                                                                        top5_acc,
+                                                                                                                                        end - start))
 
-        return losses.mean(), accuracy
+        return losses_mean, acc, top5_acc
