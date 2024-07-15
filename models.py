@@ -227,7 +227,7 @@ resnet_cfg = {
 
 
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None) -> (list, list):
+          device, pbar: tqdm = None) -> tuple:
     """
     Train a model on the provided training dataset
 
@@ -247,7 +247,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     epoch_loss = list()
     pred_list, label_list = np.array([]), np.array([])
 
-    for batch in tqdm(train_loader):
+    for batch in train_loader:
         image, label = batch
 
         # GPU casting
@@ -269,7 +269,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
         optimizer.step()
 
         if pbar is not None:
-            pbar.update(1)
+           pbar.update(1)
 
     epoch_loss = np.asarray(epoch_loss)
     epoch_acc = accuracy_score(label_list, pred_list)
@@ -286,7 +286,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
 
 
 def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, device,
-             pbar: tqdm = None) -> (float, float):
+             pbar: tqdm = None) -> tuple:
     """
     Valid a model on the provided validation dataset
 
@@ -306,7 +306,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
     pred_list, label_list = np.array([]), np.array([])
 
     with torch.no_grad():
-        for batch in tqdm(validation_loader):
+        for batch in validation_loader:
             image, label = batch
 
             # Casting to GPU
@@ -323,7 +323,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
             label_list = np.append(label_list, label.cpu().numpy())
 
             if pbar is not None:
-                pbar.update(1)
+               pbar.update(1)
 
         epoch_loss = np.asarray(epoch_loss)
         epoch_acc = accuracy_score(label_list, pred_list)
@@ -339,7 +339,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
         return epoch_loss.mean(), epoch_acc
 
 
-def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, device) -> (list, list):
+def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, device) -> tuple:
     """
     Test a model on the provided test dataset
 
