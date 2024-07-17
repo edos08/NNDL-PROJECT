@@ -39,14 +39,14 @@ class CompCarsImageFolder(DatasetFolder):
 
 
     def find_classes(self, directory: str | Path) -> Tuple[List[str], Dict[str, int]]:          
-        if self.hierarchy == 1: # descend one folder hierarchy to create classes
+        if self.hierarchy == 1:  # descend one folder hierarchy to create classes
             classes = []
             for dir in os.scandir(directory):
                 if dir.is_dir():
                     classes.extend(dir.name + os.sep + entry.name for entry in os.scandir(os.path.join(directory, dir.name)) if entry.is_dir())       
             classes.sort()
        
-        elif self.hierarchy == 2: # descend two folder hierarchies
+        elif self.hierarchy == 2:  # descend two folder hierarchies
             classes = []
             for supDir in os.scandir(directory):
                 if supDir.is_dir():
@@ -56,7 +56,7 @@ class CompCarsImageFolder(DatasetFolder):
             classes.sort()
 
         # fallthrough to default implementation
-        else: # use directories in root as classes
+        else:  # use directories in root as classes
             classes = sorted(entry.name for entry in os.scandir(directory) if entry.is_dir())
 
         if not classes:
