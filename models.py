@@ -279,7 +279,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
         optimizer.step()
 
         if pbar is not None:
-           pbar.update(1)
+            pbar.update(1)
 
     epoch_loss_mean = epoch_loss.mean()
     epoch_loss_std = epoch_loss.std()
