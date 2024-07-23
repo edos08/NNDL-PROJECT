@@ -1,6 +1,7 @@
 import os
 import random
 import math
+from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -114,7 +115,7 @@ def show_plot(signals: list, title: str, x_label: str, y_label: str, x_range: li
 
 
 def compute_mean_std_from_dataset(data: Dataset) -> tuple:
-# see https://gist.github.com/spirosdim/79fc88231fffec347f1ad5d14a36b5a8
+    # see https://gist.github.com/spirosdim/79fc88231fffec347f1ad5d14a36b5a8
     """
     Compute the mean and standard deviation from a list of images
     We assume that the images of the dataloader have the same height and width
@@ -122,22 +123,23 @@ def compute_mean_std_from_dataset(data: Dataset) -> tuple:
     Args:
         data (Dataset): Dataset from which to compute the mean and standard deviation
     """
-    channels_sum, channels_sqrd_sum =  torch.zeros(3), torch.zeros(3)
-    num_batches = 0 
+    channels_sum, channels_sqr_sum = torch.zeros(3), torch.zeros(3)
+    num_batches = 0
 
-    for image, _ in tqdm(data): # shape of images: [c,w,h]
+    for image, _ in data:  # shape of images: [c,w,h]
         image = to_tensor(image)
-        channels_sum += torch.mean(image, dim=[1,2])
-        channels_sqrd_sum += torch.mean(image ** 2, dim=[1, 2])
+        channels_sum += torch.mean(image, dim=[1, 2])
+        channels_sqr_sum += torch.mean(image ** 2, dim=[1, 2])
         num_batches += 1
 
     mean = channels_sum / num_batches
-    std = torch.sqrt(channels_sqrd_sum / num_batches - mean ** 2)
+    std = torch.sqrt(channels_sqr_sum / num_batches - mean ** 2)
 
     return mean, std
 
+
 def compute_mean_std(loader: DataLoader) -> tuple:
-# see https://gist.github.com/spirosdim/79fc88231fffec347f1ad5d14a36b5a8
+    # see https://gist.github.com/spirosdim/79fc88231fffec347f1ad5d14a36b5a8
     """
     Compute the mean and standard deviation from a list of images
     We assume that the images of the dataloader have the same height and width
@@ -145,16 +147,16 @@ def compute_mean_std(loader: DataLoader) -> tuple:
     Args:
         loader (DataLoader): Dataset loader to compute the mean and standard deviation
     """
-    channels_sum, channels_sqrd_sum =  torch.zeros(3), torch.zeros(3)
-    num_batches = 0 
+    channels_sum, channels_sqr_sum = torch.zeros(3), torch.zeros(3)
+    num_batches = 0
 
-    for batch_images, _ in tqdm(loader): # shape of images: [b,c,w,h]
-        channels_sum += torch.mean(batch_images, dim=[0,2,3])
-        channels_sqrd_sum += torch.mean(batch_images ** 2, dim=[0, 1, 2])
+    for batch_images, _ in tqdm(loader):  # shape of images: [b,c,w,h]
+        channels_sum += torch.mean(batch_images, dim=[0, 2, 3])
+        channels_sqr_sum += torch.mean(batch_images ** 2, dim=[0, 1, 2])
         num_batches += 1
 
     mean = channels_sum / num_batches
-    std = torch.sqrt(channels_sqrd_sum / num_batches - mean ** 2)
+    std = torch.sqrt(channels_sqr_sum / num_batches - mean ** 2)
 
     return mean, std
 
@@ -177,28 +179,29 @@ def compute_mean_std_from_images(images: list) -> tuple:
 
     for image in images:
         for i in range(3):
-            std[i] = std[i] + ((image[:, :, i] - mean[i])**2).sum()/(image.shape[0]*image.shape[1])
+            std[i] = std[i] + ((image[:, :, i] - mean[i]) ** 2).sum() / (image.shape[0] * image.shape[1])
 
-    mean = mean/len(images)
-    std = np.sqrt(std/len(images))
+    mean = mean / len(images)
+    std = np.sqrt(std / len(images))
 
     return mean, std
 
-def train_val_dataset(dataset: Dataset, val_split: float=0.2) -> tuple:
+
+def train_val_dataset(dataset: Dataset, val_split: float = 0.2) -> dict[str, Subset[Any]]:
     train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
-    datasets = {}
-    datasets['train'] = Subset(dataset, train_idx)
-    datasets['val'] = Subset(dataset, val_idx)
+    datasets = {'train': Subset(dataset, train_idx), 'val': Subset(dataset, val_idx)}
     return datasets
 
 
 def show_grid(images, labels):
     out = torchvision.utils.make_grid(images)
-    npimg = out.numpy()
-    np.clip(npimg, 0, 1)
-    plt.imshow(np.transpose(npimg, (1, 2, 0)))
+    np_img = out.numpy()
+    np.clip(np_img, 0, 1)
+    plt.imshow(np.transpose(np_img, (1, 2, 0)))
     plt.show()
-    print(' '.join(f'{label_dict[labels[j].item()]}' for j in range(len(labels))))
+    # TO BE FIXED
+    # print(' '.join(f'{label_dict[labels[j].item()]}' for j in range(len(labels))))
+
 
 def read_images(path: str) -> list:
     """
