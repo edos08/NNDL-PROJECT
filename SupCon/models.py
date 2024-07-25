@@ -268,7 +268,7 @@ def top_k_accuracy(target, predicted, k=5):
 
 
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None, sup_con=False) -> tuple:
+          device, pbar: tqdm = None, use_amp = False) -> tuple:
     """
     Train a model on the provided training dataset
 
@@ -289,56 +289,49 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     epoch_loss = np.array([])
     epoch_acc, epoch_top5_acc = np.array([]), np.array([])
 
-    use_amp = False
     scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
     for batch in train_loader:
         images, labels = batch
 
-        bsz = 0
-        if sup_con:
-            images = torch.cat([images[0], images[1]], dim=0)
-            bsz = labels.shape[0]
+        images = torch.cat([images[0], images[1]], dim=0)
+        bsz = labels.shape[0]
 
         # GPU casting
         images = images.to(device)
         labels = labels.to(device)
 
         # Forward step
-        if sup_con:
-            print("Entering here")
+        if use_amp:
             with torch.autocast(device_type=device, dtype=torch.float16, enabled=use_amp):
                 features = model(images)
                 f1, f2 = torch.split(features, [bsz, bsz], dim=0)
                 features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
                 loss = criterion(features, labels)
         else:
-            pred_label = model(images)
-            loss = criterion(pred_label, labels)
-
-            # Accuracy
-            batch_acc = top_k_accuracy(labels, pred_label, k=1)
-            batch_top5_acc = top_k_accuracy(labels, pred_label, k=5)
-
-            epoch_acc = np.append(epoch_acc, batch_acc)
-            epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
+            features = model(images)
+            f1, f2 = torch.split(features, [bsz, bsz], dim=0)
+            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
+            loss = criterion(features, labels)
 
         epoch_loss = np.append(epoch_loss, loss.cpu().data)
 
         # Backpropagation
-        scaler.scale(loss).backward()
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad()
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad()
+        else:
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
         if pbar is not None:
             pbar.update(1)
 
     epoch_loss_mean = epoch_loss.mean()
     epoch_loss_std = epoch_loss.std()
-    if not sup_con:
-        epoch_acc = epoch_acc.mean()
-        epoch_top5_acc = epoch_top5_acc.mean()
 
     end = time.time()
 

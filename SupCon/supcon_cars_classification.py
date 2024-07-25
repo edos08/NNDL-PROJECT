@@ -1,4 +1,4 @@
-from torchvision.transforms import v2
+from torchvision.transforms import v2, transforms
 from tqdm import trange
 
 # from custom files
@@ -25,7 +25,7 @@ params = {
     'epoch_num': 50,  # number of epochs
     'lr': 1e-1,  # (initial) Learning Rate
     'weight_decay': 1e-4,  # L2 Penalty
-    'batch_size': 256,  # batch size (depends on hardware)
+    'batch_size': 128,  # batch size (depends on hardware)
     'momentum': 0.9,
 
     'hierarchy': 0,  # Choose 0 for manufacturer classification, 1 for model classification
@@ -33,13 +33,20 @@ params = {
 
     'resnet': resnet_cfg[resnet_type],  # ResNet configuration
 
-    'use_train_test_split': False  # True: use prepared split, False: use total dataset
+    'use_train_test_split': False,  # True: use prepared split, False: use total dataset
+
+    'use_amp': False,  # Automatic Mixed Precision (AMP) for faster training on NVIDIA GPUs
 }
 
 
 def set_device():
     if torch.cuda.is_available():
         params["device"] = torch.device("cuda")  # option for NVIDIA GPUs
+        # The flag below controls whether to allow TF32 on matmul. This flag defaults to False
+        # in PyTorch 1.12 and later.
+        torch.backends.cuda.matmul.allow_tf32 = True
+        # The flag below controls whether to allow TF32 on cuDNN. This flag defaults to True.
+        torch.backends.cudnn.allow_tf32 = True
     elif torch.backends.mps.is_available():
         params["device"] = torch.device("mps")  # option for Mac M-series chips (GPUs)
     else:
@@ -48,9 +55,7 @@ def set_device():
     print("Device: {}".format(params["device"]))
 
 
-def main():
-    set_device()
-
+def set_loader() -> tuple[int, dict[str, DataLoader]]:
     # Load full dataset
     # hierarchy=0 -> manufacturer classification; hierarchy=1 -> model classification
     total_set = CompCarsImageFolder(root, hierarchy=params['hierarchy'])
@@ -71,30 +76,53 @@ def main():
     # print(f"Validation dataset std: {val_std}")
     val_mean, val_std = mean, std
 
-    data_transforms = {  # TODO: TUNE
-        'train': v2.Compose([
-            v2.ToImage(),
-            v2.ToDtype(torch.uint8, scale=True),
-            v2.RandomChoice([
-                v2.Resize(256),
-                v2.Resize(224),
-                v2.Resize(320)
+    # inspired from https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
+    if params['use_amp']:
+        data_transforms = {  # TODO: TUNE
+            'train': v2.Compose([
+                v2.ToImage(),
+                v2.ToDtype(torch.uint8, scale=True),
+                v2.RandomChoice([
+                    v2.Resize(256),
+                    v2.Resize(224),
+                    v2.Resize(320)
+                ]),
+                v2.RandomHorizontalFlip(),
+                v2.RandomCrop(224),
+                v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+                v2.ToDtype(torch.float16, scale=True),
+                v2.Normalize(train_mean, train_std)
             ]),
-            v2.RandomHorizontalFlip(),
-            v2.RandomCrop(224),
-            v2.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-            v2.ToDtype(torch.float16, scale=True),
-            v2.Normalize(train_mean, train_std)
-        ]),
-        'val': v2.Compose([
-            v2.ToImage(),
-            v2.ToDtype(torch.uint8, scale=True),
-            v2.Resize(256),
-            v2.CenterCrop(224),
-            v2.ToDtype(torch.float16, scale=True),
-            v2.Normalize(val_mean, val_std)
-        ])
-    }
+            'val': v2.Compose([
+                v2.ToImage(),
+                v2.ToDtype(torch.uint8, scale=True),
+                v2.Resize(256),
+                v2.CenterCrop(224),
+                v2.ToDtype(torch.float16, scale=True),
+                v2.Normalize(val_mean, val_std)
+            ])
+        }
+    else:
+        data_transforms = { # TODO: TUNE
+            'train': transforms.Compose([
+                transforms.RandomChoice([
+                    transforms.Resize(256),
+                    transforms.Resize(224),
+                    transforms.Resize(320)
+                ]),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomCrop(224),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+                transforms.ToTensor(),
+                transforms.Normalize(train_mean, train_std)
+            ]),
+            'val': transforms.Compose([
+                transforms.Resize(256),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(val_mean, val_std)
+            ])
+        }
 
     wrapped_datasets = {
         'train': WrapperDataset(datasets['train'], transform=TwoCropTransform(data_transforms['train'])),
@@ -117,13 +145,27 @@ def main():
     print(f"Batch of validation images shape: {x.shape}")
     print(f"Batch of validation labels shape: {y.shape}")
 
+    return len(total_set.classes), dataloaders
+
+
+def set_model(num_classes) -> tuple[SupConResNet, SupConLoss]:
     # Set up SupConResNet model
-    sup_con_resnet = SupConResNet(len(total_set.classes), resnet_type=resnet_type).to(params['device'])
+    sup_con_resnet = (SupConResNet(num_classes, resnet_type=resnet_type))
+    
+    if params['use_amp']:
+        sup_con_resnet.to(params['device'], dtype=torch.float16)
+    else:
+        sup_con_resnet.to(params['device'])
 
     # Loss and Optimizer
     criterion = SupConLoss(params["device"], temperature=0.1)
+
+    return sup_con_resnet, criterion
+
+
+def set_optimizer(model) -> tuple[torch.optim, torch.optim.lr_scheduler]:
     optimizer = torch.optim.SGD(
-        sup_con_resnet.parameters(),
+        model.parameters(),
         lr=params['lr'],
         weight_decay=params['weight_decay'],
         momentum=params['momentum']
@@ -132,6 +174,17 @@ def main():
     # LR scheduler (using Top-1-Accuracy as Validation metric)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, min_lr=1e-4, patience=2,
                                                            threshold=1e-3)
+    return optimizer, scheduler
+
+
+def main():
+    set_device()
+
+    num_classes, dataloaders = set_loader()
+
+    sup_con_resnet, criterion = set_model(num_classes)
+
+    optimizer, scheduler = set_optimizer(sup_con_resnet)
 
     # Save performance metrics
     train_losses = list()
@@ -156,15 +209,12 @@ def main():
                                desc="Training and validation per epoch", position=1, leave=False,
                                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]")
 
-    # Stop the training phase in case there is no improvement
-    # early_stopper = EarlyStopper(patience=10, min_delta=0.1)
-
     for epoch in pbar_epoch:
         pbar_inside_epoch.reset()
 
         # Training
         train_results = train(dataloaders['train'], sup_con_resnet, epoch, criterion, optimizer, params["device"],
-                              pbar=pbar_inside_epoch, sup_con=True)
+                              pbar=pbar_inside_epoch)
         train_losses.append(train_results[0])
 
         # ReduceLROnPlateau scheduler (reduce LR by 10 when top-1-accuracy does not improve)
@@ -178,12 +228,6 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'train_losses': train_losses,
         }, CHECKPOINT_PATH)
-
-        # Comment on the following lines if you don't want to stop early in case of no improvement
-        # if early_stopper.early_stop(validation_results[0]):
-        #     params['epoch_num'] = epoch
-        #     print("\n\nEarly stopping...")
-        #     break
 
     pbar_inside_epoch.close()
 
