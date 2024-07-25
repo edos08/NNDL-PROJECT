@@ -200,7 +200,7 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-    def forward(self, x, classification=True):
+    def forward(self, x):
 
         # preprocess
         x = self.conv1(x)
@@ -215,43 +215,18 @@ class ResNet(nn.Module):
         # classification via dense layer
         x = self.avgpool(x)
         x = torch.flatten(x, 1)  # x.view(x.size(0), -1)
-        if classification:
-            x = self.fc(x)
+        x = self.fc(x)
+
         return x
-
-
-class SupConResNet(ResNet):
-    """backbone + projection head"""
-
-    def __init__(self, num_classes, resnet_type="resnet18", head='mlp', feat_dim=128):
-        super(SupConResNet, self).__init__(resnet_cfg[resnet_type]["block"], resnet_cfg[resnet_type]["layers"],
-                                           num_classes)
-        dim_in = resnet_cfg[resnet_type]["dim_in"]
-        if head == 'linear':
-            self.head = nn.Linear(dim_in, feat_dim)
-        elif head == 'mlp':
-            self.head = nn.Sequential(
-                nn.Linear(dim_in, dim_in),
-                nn.ReLU(inplace=True),
-                nn.Linear(dim_in, feat_dim)
-            )
-        else:
-            raise NotImplementedError(
-                'head not supported: {}'.format(head))
-
-    def forward(self, x, **kwargs):
-        feat = super().forward(x, classification=False)
-        feat = nn.functional.normalize(self.head(feat), dim=1)
-        return feat
 
 
 # from https://github.com/facebookarchive/fb.resnet.torch/blob/master/models/resnet.lua
 resnet_cfg = {
-    "resnet18": {"block": BasicBlock, "layers": [2, 2, 2, 2], "dim_in": 512},
-    "resnet34": {"block": BasicBlock, "layers": [3, 4, 6, 3], "dim_in": 512},
-    "resnet50": {"block": BottleneckBlock, "layers": [3, 4, 6, 3], "dim_in": 2048},
-    "resnet101": {"block": BottleneckBlock, "layers": [3, 4, 23, 3], "dim_in": 2048},
-    "resnet152": {"block": BottleneckBlock, "layers": [3, 8, 36, 3], "dim_in": 4096},
+    "resnet18": {"block": BasicBlock, "layers": [2, 2, 2, 2]},
+    "resnet34": {"block": BasicBlock, "layers": [3, 4, 6, 3]},
+    "resnet50": {"block": BottleneckBlock, "layers": [3, 4, 6, 3]},
+    "resnet101": {"block": BottleneckBlock, "layers": [3, 4, 23, 3]},
+    "resnet152": {"block": BottleneckBlock, "layers": [3, 8, 36, 3]},
 }
 
 
@@ -268,7 +243,7 @@ def top_k_accuracy(target, predicted, k=5):
 
 
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None, sup_con=False) -> tuple:
+          device, pbar: tqdm = None) -> tuple:
     """
     Train a model on the provided training dataset
 
@@ -280,7 +255,6 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
          optimizer (torch.optim): optimizer for the model
          device (torch.device): the device to load the model
          pbar (tqdm): tqdm progress bar
-         sup_con (bool): whether to use supervised contrastive learning
     """
 
     model.train()
@@ -292,33 +266,22 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     for batch in train_loader:
         images, labels = batch
 
-        bsz = 0
-        if sup_con:
-            images = torch.cat([images[0], images[1]], dim=0)
-            bsz = labels.shape[0]
-
         # GPU casting
         images = images.to(device)
         labels = labels.to(device)
 
         # Forward step
-        if sup_con:
-            features = model(images)
-            f1, f2 = torch.split(features, [bsz, bsz], dim=0)
-            features = torch.cat([f1.unsqueeze(1), f2.unsqueeze(1)], dim=1)
-            loss = criterion(features, labels)
-        else:
-            pred_label = model(images)
-            loss = criterion(pred_label, labels)
-
-            # Accuracy
-            batch_acc = top_k_accuracy(labels, pred_label, k=1)
-            batch_top5_acc = top_k_accuracy(labels, pred_label, k=5)
-
-            epoch_acc = np.append(epoch_acc, batch_acc)
-            epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
+        pred_label = model(images)
+        loss = criterion(pred_label, labels)
 
         epoch_loss = np.append(epoch_loss, loss.cpu().data)
+
+        # Accuracy
+        batch_acc = top_k_accuracy(labels, pred_label, k=1)
+        batch_top5_acc = top_k_accuracy(labels, pred_label, k=5)
+
+        epoch_acc = np.append(epoch_acc, batch_acc)
+        epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -330,9 +293,8 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
 
     epoch_loss_mean = epoch_loss.mean()
     epoch_loss_std = epoch_loss.std()
-    if not sup_con:
-        epoch_acc = epoch_acc.mean()
-        epoch_top5_acc = epoch_top5_acc.mean()
+    epoch_acc = epoch_acc.mean()
+    epoch_top5_acc = epoch_top5_acc.mean()
 
     end = time.time()
 
