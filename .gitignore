@@ -1,2 +1,6 @@
 
 .DS_Store
+venv/
+.idea/
+__pycache__/
+training_checkpoints/
