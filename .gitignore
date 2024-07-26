@@ -4,3 +4,4 @@ venv/
 .idea/
 __pycache__/
 training_checkpoints/
+.vscode/

@@ -199,7 +199,7 @@ class WrapperDataset:
             image = self.transform(image)
         if self.target_transform is not None:
             label = self.target_transform(label)
-        return image, label
+        return image, label, index
 
     def __len__(self):
         return len(self.dataset)
