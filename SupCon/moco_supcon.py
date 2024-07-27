@@ -2,9 +2,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import time
-from torchsummary import summary
 from torch.utils.data import DataLoader
-from tqdm.notebook import tqdm
+from tqdm.contrib.telegram import tqdm
 
 
 class MoCo(nn.Module):
@@ -37,10 +36,10 @@ class MoCo(nn.Module):
             self.encoder_q.fc = nn.Sequential(nn.Linear(dim_mlp, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, dim))
             self.encoder_k.fc = nn.Sequential(nn.Linear(dim_mlp, hidden_dim), nn.ReLU(), nn.Linear(hidden_dim, dim))
 
-        #enc_q = self.encoder_q.cuda()
-        #enc_k = self.encoder_k.cuda()
-        #summary(enc_q, input_size=(3, 224, 224), batch_size=256, device='cuda')
-        #summary(enc_k, input_size=(3, 224, 224), batch_size=256, device='cuda')
+        # enc_q = self.encoder_q.cuda()
+        # enc_k = self.encoder_k.cuda()
+        # summary(enc_q, input_size=(3, 224, 224), batch_size=256, device='cuda')
+        # summary(enc_k, input_size=(3, 224, 224), batch_size=256, device='cuda')
 
         for param_q, param_k in zip(self.encoder_q.parameters(), self.encoder_k.parameters()):
             param_k.data.copy_(param_q.data)  # initialize
@@ -133,7 +132,7 @@ class MoCo(nn.Module):
     
 
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None, use_amp = False) -> float:
+          device, pbar: tqdm = None) -> float:
     """
     Train a model on the provided training dataset
 
@@ -145,7 +144,6 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
          optimizer (torch.optim): optimizer for the model
          device (torch.device): the device to load the model
          pbar (tqdm): tqdm progress bar
-         use_amp (bool): whether to use automatic mixed precision
     """
 
     model.train()

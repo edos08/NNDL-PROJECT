@@ -1,7 +1,7 @@
 from PIL import Image
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Tuple, Optional
+from typing import Any, Callable, Dict, List, Tuple, Optional, LiteralString
 from torchvision.datasets import DatasetFolder, VisionDataset
 
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
@@ -91,7 +91,7 @@ class ImagesFromTextFile(VisionDataset):
             root: str | Path,
             txt_file: str | Path,
             class_to_idx: Dict[str, int]
-    ) -> List[Tuple[str, int]]:
+    ) -> list[tuple[LiteralString | str | bytes, int]]:
         instances = []
 
         lines = read_file(txt_file)

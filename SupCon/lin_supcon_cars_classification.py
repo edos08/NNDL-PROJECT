@@ -1,23 +1,16 @@
 from torchvision import transforms
-from tqdm.contrib.telegram import trange, tqdm
+from tqdm.contrib.telegram import trange
 import torch.nn as nn
 
 # from custom files
-from dataset import CompCarsImageFolder, WrapperDataset, TwoCropTransform
+from dataset import CompCarsImageFolder, WrapperDataset
 from resnet import ResNet, resnet_cfg, train, validate
-from moco_supcon import MoCo
-from losses import SupLoss
 from utils import *
 
-# EDO'S PATHS
-root = '/Volumes/EDO/NNDL/CompCars dataset/data/image/'
-train_file = '/Volumes/EDO/NNDL/CompCars dataset/data/train_test_split/classification/train.txt'
-test_file = '/Volumes/EDO/NNDL/CompCars dataset/data/train_test_split/classification/test.txt'
-
 # DEFAULT PATHS
-#root = '/home/ubuntu/data/image/'
-#train_file = '/home/ubuntu/data/train_test_split/classification/train.txt'
-#test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
+root = '/home/ubuntu/data/image/'
+train_file = '/home/ubuntu/data/train_test_split/classification/train.txt'
+test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
 
 resnet_type = 'resnet18'  # 'resnet18', 'resnet34', 'resnet50'
 
@@ -40,7 +33,7 @@ params = {
 
     # TO DO
     'moco_dim': 128,
-    'moco_k': 1024,                     # queue size (car maker: 1024, car model: 8192)
+    'moco_k': 1024,                     # queue size (carmaker: 1024, car model: 8192)
     'moco_m': 0.999,
     'moco_t': 0.2,                      # temperature parameter
     'mlp': True
@@ -85,7 +78,7 @@ def set_loader() -> tuple[int, dict[str, DataLoader]]:
     val_mean, val_std = mean, std
 
     # inspired from https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
-    data_transforms = { # TODO: TUNE
+    data_transforms = {
         'train': transforms.Compose([
             transforms.RandomChoice([
                 transforms.Resize(256),
@@ -206,7 +199,7 @@ def save_model(model, train_losses, train_acc, train_top5_acc, validation_losses
     MODEL_PATH += str(params['batch_size']) + '.pth'
 
     torch.save({
-        'model_state_dict' : model.state_dict(),
+        'model_state_dict': model.state_dict(),
         'train_losses': train_losses,
         'train_acc': train_acc,
         'train_top5_acc': train_top5_acc,
@@ -222,7 +215,7 @@ def main():
 
     num_classes, dataloaders = set_loader()
 
-    model, criterion = set_model(num_classes, path='trained_models/pretrained_moco_weights_car_makers_256.pth')
+    model, criterion = set_model(num_classes, path='./trained_models/pretrained_moco_weights_car_makers_256.pth')
 
     optimizer, scheduler = set_optimizer(model)
 
@@ -247,8 +240,8 @@ def main():
         validation_top5_acc = checkpoint['validation_top5_acc']
 
     # Just some fancy progress bars with Telegram support for tracking training progress
-    token="7201508620:AAFKipOQ7_Xdcgid1xDf60fCCkJuKAcPVBw"
-    chat_id="-4239730104"
+    token = "7201508620:AAFKipOQ7_Xdcgid1xDf60fCCkJuKAcPVBw"
+    chat_id = "-4239730104"
 
     pbar_epoch = trange(start_epoch, params["epoch_num"], initial=start_epoch, total=params["epoch_num"],
                         desc="Training", unit="epoch", position=0, leave=True, token=token, chat_id=chat_id,
@@ -278,10 +271,10 @@ def main():
 
         # Checkpoint
         torch.save({
-            'epoch' : epoch + 1,
-            'model_state_dict' : model.state_dict(),
+            'epoch': epoch + 1,
+            'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
-            'scheduler_state_dict' : scheduler.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
             'train_losses': train_losses,
             'train_acc': train_acc,
             'train_top5_acc': train_top5_acc,
@@ -292,7 +285,7 @@ def main():
 
     pbar_inside_epoch.close()
 
-    save_model(model, optimizer, params["epoch_num"], train_losses)
+    save_model(model, train_losses, train_acc, train_top5_acc, validation_losses, validation_acc, validation_top5_acc)
 
 
 if __name__ == '__main__':

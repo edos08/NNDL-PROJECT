@@ -1,8 +1,6 @@
 # ref PCL
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
 
 
 class SupLoss(nn.Module):
@@ -17,7 +15,6 @@ class SupLoss(nn.Module):
                   if features.is_cuda
                   else torch.device('cpu'))
 
-        ss = features.shape[0]
         batch_size = (features.shape[0] - self.K) // 2
 
         labels = labels.contiguous().view(-1, 1)

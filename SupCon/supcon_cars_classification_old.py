@@ -3,7 +3,7 @@ from tqdm import trange
 
 # from custom files
 from dataset import CompCarsImageFolder, WrapperDataset, TwoCropTransform
-from models import resnet_cfg, SupConResNet
+from moco import resnet_cfg, SupConResNet
 from models import train
 from utils import *
 from losses import SupConLoss

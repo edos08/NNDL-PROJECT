@@ -34,7 +34,7 @@ params = {
 
     # TO DO
     'moco_dim': 128,
-    'moco_k': 1024,                     # queue size (car maker: 1024, car model: 8192)
+    'moco_k': 1024,                     # queue size (carmaker: 1024, car model: 8192)
     'moco_m': 0.999,
     'moco_t': 0.2,                      # temperature parameter
     'mlp': True
@@ -57,7 +57,7 @@ def set_device():
     print("Device: {}".format(params["device"]))
 
 
-def set_loader() -> DataLoader:
+def set_loader() -> dict[str, DataLoader]:
     # Load full dataset
     # hierarchy=0 -> manufacturer classification; hierarchy=1 -> model classification
     total_set = CompCarsImageFolder(root, hierarchy=params['hierarchy'])
@@ -79,7 +79,7 @@ def set_loader() -> DataLoader:
     val_mean, val_std = mean, std
 
     # inspired from https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
-    data_transforms = { # TODO: TUNE
+    data_transforms = {
         'train': transforms.Compose([
             transforms.RandomChoice([
                 transforms.Resize(256),
@@ -172,7 +172,7 @@ def save_model(model: MoCo, optimizer: torch.optim, epoch: int, train_losses: li
 
     torch.save({
         'params': params,
-        'model_state_dict' : model.state_dict(),
+        'model_state_dict': model.state_dict(),
         'optimizer': optimizer,
         'epoch': epoch,
         'train_losses': train_losses

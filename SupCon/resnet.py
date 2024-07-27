@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from torch.utils.data import DataLoader
 # from sklearn.metrics import accuracy_score # using custom score function
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 
 
 class ConvolutionalModel(nn.Module):
@@ -360,7 +360,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
         end = time.time()
 
         print("\n-- VALIDATION --")
-        print( "Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(
+        print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(
                 epoch + 1,
                 epoch_loss_mean,
                 epoch_loss_std,
