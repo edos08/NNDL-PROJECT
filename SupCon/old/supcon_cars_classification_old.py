@@ -208,7 +208,7 @@ def main():
     # Save performance metrics
     train_losses = list()
 
-    CHECKPOINT_PATH = './training_checkpoints/checkpoint.pth'
+    CHECKPOINT_PATH = '../training_checkpoints/checkpoint.pth'
     START_FROM_CHECKPOINT = False  # set to TRUE to start from checkpoint
     start_epoch = 0
 
