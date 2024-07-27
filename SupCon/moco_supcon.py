@@ -1,7 +1,10 @@
-# Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved
 import torch
 import torch.nn as nn
+import numpy as np
+import time
 from torchsummary import summary
+from torch.utils.data import DataLoader
+from tqdm.notebook import tqdm
 
 
 class MoCo(nn.Module):
@@ -128,3 +131,60 @@ class MoCo(nn.Module):
 
         return features, target
     
+
+def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
+          device, pbar: tqdm = None, use_amp = False) -> float:
+    """
+    Train a model on the provided training dataset
+
+    Args:
+         train_loader (DataLoader): training dataset
+         model (nn.Module): model to train
+         epoch (int): the current epoch
+         criterion (nn.modules.loss): loss function
+         optimizer (torch.optim): optimizer for the model
+         device (torch.device): the device to load the model
+         pbar (tqdm): tqdm progress bar
+         use_amp (bool): whether to use automatic mixed precision
+    """
+
+    model.train()
+    start = time.time()
+
+    epoch_loss = np.array([])
+
+    for images, _, index in train_loader:
+        # GPU casting
+        images[0] = images[0].to(device)
+        images[1] = images[1].to(device)
+        index = index.to(device)
+
+        if images[0].shape[0] != 256:
+            print("Batch size is not 256, skipping batch: ", images[0].shape[0])
+            continue
+
+        # Forward step
+        features, targets = model(im_q=images[0], im_k=images[1], index=index)
+        loss = criterion(features, targets)
+
+        epoch_loss = np.append(epoch_loss, loss.cpu().data)
+
+        # Backpropagation
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+
+        if pbar is not None:
+            pbar.update(1)
+
+    epoch_loss_mean = epoch_loss.mean()
+    epoch_loss_std = epoch_loss.std()
+
+    end = time.time()
+
+    print("\n-- TRAINING --")
+    print("Epoch: ", epoch + 1, "\n"
+          " - Loss: ", epoch_loss_mean, " +- ", epoch_loss_std, "\n "
+          " - Time: ", end - start, "s")
+
+    return epoch_loss_mean

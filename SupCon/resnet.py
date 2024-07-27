@@ -6,7 +6,7 @@ import torch.nn as nn
 
 from torch.utils.data import DataLoader
 # from sklearn.metrics import accuracy_score # using custom score function
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 
 
 class ConvolutionalModel(nn.Module):
@@ -229,8 +229,20 @@ resnet_cfg = {
 }
 
 
+# example init:
+#   resnet50 = ResNet(resnet_cfg["ResNet50"]["block"], resnet_cfg["ResNet50"]["layers"], num_classes=10)
+
+def top_k_accuracy(target, predicted, k=5):
+    with torch.no_grad():
+        max_k_preds = predicted.topk(k, dim=1)[1]
+        correct = max_k_preds.eq(target.view(-1, 1).expand_as(max_k_preds))
+        top_k_acc = correct.sum().float().item() / target.size(0)
+
+    return top_k_acc
+
+
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None, use_amp = False) -> float:
+          device, pbar: tqdm = None) -> tuple:
     """
     Train a model on the provided training dataset
 
@@ -242,29 +254,33 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
          optimizer (torch.optim): optimizer for the model
          device (torch.device): the device to load the model
          pbar (tqdm): tqdm progress bar
-         use_amp (bool): whether to use automatic mixed precision
     """
 
     model.train()
     start = time.time()
 
     epoch_loss = np.array([])
+    epoch_acc, epoch_top5_acc = np.array([]), np.array([])
 
-    for images, _, index in train_loader:
+    for batch in train_loader:
+        images, labels, _ = batch
+
         # GPU casting
-        images[0] = images[0].to(device)
-        images[1] = images[1].to(device)
-        index = index.to(device)
-
-        if images[0].shape[0] != 256:
-            print("Batch size is not 256, skipping batch: ", images[0].shape[0])
-            continue
+        images = images.to(device)
+        labels = labels.to(device)
 
         # Forward step
-        features, targets = model(im_q=images[0], im_k=images[1], index=index)
-        loss = criterion(features, targets)
+        pred_label = model(images)
+        loss = criterion(pred_label, labels)
 
         epoch_loss = np.append(epoch_loss, loss.cpu().data)
+
+        # Accuracy
+        batch_acc = top_k_accuracy(labels, pred_label, k=1)
+        batch_top5_acc = top_k_accuracy(labels, pred_label, k=5)
+
+        epoch_acc = np.append(epoch_acc, batch_acc)
+        epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
 
         # Backpropagation
         optimizer.zero_grad()
@@ -276,12 +292,138 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
 
     epoch_loss_mean = epoch_loss.mean()
     epoch_loss_std = epoch_loss.std()
+    epoch_acc = epoch_acc.mean()
+    epoch_top5_acc = epoch_top5_acc.mean()
 
     end = time.time()
 
     print("\n-- TRAINING --")
-    print("Epoch: ", epoch + 1, "\n"
-          " - Loss: ", epoch_loss_mean, " +- ", epoch_loss_std, "\n "
-          " - Time: ", end - start, "s")
+    print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(
+            epoch + 1,
+            epoch_loss_mean,
+            epoch_loss_std,
+            epoch_acc,
+            epoch_top5_acc,
+            end - start))
 
-    return epoch_loss_mean
+    return epoch_loss_mean, epoch_acc, epoch_top5_acc
+
+
+def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, device,
+             pbar: tqdm = None) -> tuple:
+    """
+    Valid a model on the provided validation dataset
+
+    Args:
+        validation_loader (DataLoader): validation dataset
+        model (nn.Module): the model to evaluate
+        epoch (int): the current epoch
+        criterion (torch.nn.modules.loss): loss function
+        device (torch.device): the device to load the model
+        pbar (tqdm): tqdm progress bar
+    """
+
+    model.eval()
+    start = time.time()
+
+    epoch_loss = np.array([])
+    epoch_acc, epoch_top5_acc = np.array([]), np.array([])
+
+    with torch.no_grad():
+        for batch in validation_loader:
+            image, label, _ = batch
+
+            # Casting to GPU
+            image = image.to(device)
+            label = label.to(device)
+
+            # Forward step
+            pred_label = model(image)
+            loss = criterion(pred_label, label)
+            epoch_loss = np.append(epoch_loss, loss.cpu().data)
+
+            # Accuracy
+            batch_acc = top_k_accuracy(label, pred_label, k=1)
+            batch_top5_acc = top_k_accuracy(label, pred_label, k=5)
+
+            epoch_acc = np.append(epoch_acc, batch_acc)
+            epoch_top5_acc = np.append(epoch_top5_acc, batch_top5_acc)
+
+            if pbar is not None:
+                pbar.update(1)
+
+        epoch_loss_mean = epoch_loss.mean()
+        epoch_loss_std = epoch_loss.std()
+        epoch_acc = epoch_acc.mean()
+        epoch_top5_acc = epoch_top5_acc.mean()
+
+        end = time.time()
+
+        print("\n-- VALIDATION --")
+        print( "Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(
+                epoch + 1,
+                epoch_loss_mean,
+                epoch_loss_std,
+                epoch_acc,
+                epoch_top5_acc,
+                end - start))
+
+        return epoch_loss.mean(), epoch_acc, epoch_top5_acc
+
+
+def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, device) -> tuple:
+    """
+    Test a model on the provided test dataset
+
+    Args:
+        test_loader (DataLoader): validation dataset
+        model (nn.Module): the model to evaluate
+        criterion (nn.modules.loss): loss function
+    """
+
+    model.eval()
+    start = time.time()
+
+    losses = np.array([])
+    acc, top5_acc = np.array([]), np.array([])
+
+    with torch.no_grad():
+        for batch in test_loader:
+            image, label = batch
+
+            # Casting to GPU
+            image = image.to(device)
+            label = label.to(device)
+
+            # Forward step
+            pred_label = model(image)
+            loss = criterion(pred_label, label)
+            losses = np.append(losses, loss.cpu().data)
+
+            batch_acc = top_k_accuracy(label, pred_label, k=1)
+            batch_top5_acc = top_k_accuracy(label, pred_label, k=5)
+
+            acc = np.append(acc, batch_acc)
+            top5_acc = np.append(top5_acc, batch_top5_acc)
+
+        losses_mean = losses.mean()
+        losses_std = losses.std()
+        acc = acc.mean()
+        top5_acc = top5_acc.mean()
+
+        end = time.time()
+
+        print("\n-- TEST --")
+        print(
+            "Test results:\n "
+            "- Loss: {:.3f} +- {:.3f}\n "
+            "- Top-1-Accuracy: {:.2f}\n "
+            "- Top-5-Accuracy: {:.2f}\n "
+            "- Time: {:.2f}s".format(
+                losses_mean,
+                losses_std,
+                acc,
+                top5_acc,
+                end - start))
+
+        return losses_mean, acc, top5_acc
