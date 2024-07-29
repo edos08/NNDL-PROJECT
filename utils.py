@@ -16,6 +16,20 @@ from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 
+def fix_all_seeds(seed: int = 0):
+    
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False          # NOTE: might reduce performance
+    torch.use_deterministic_algorithms(True)        # NOTE: non-deterministic layers will throw runtime errors
+    torch.mps.manual_seed(seed)
+
+
 def show_images_with_text(images: list, labels: list = None, title: str = None, figsize: tuple = None):
     """
     Display an array of images from a list of images.
@@ -187,8 +201,8 @@ def compute_mean_std_from_images(images: list) -> tuple:
     return mean, std
 
 
-def train_val_dataset(dataset: Dataset, val_split: float = 0.2) -> dict[str, Subset[Any]]:
-    train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
+def train_val_dataset(dataset: Dataset, val_split: int | float = 0.2, seed: int = 0) -> dict[str, Subset[Any]]:
+    train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split, random_state=seed)
     datasets = {'train': Subset(dataset, train_idx), 'val': Subset(dataset, val_idx)}
     return datasets
 
