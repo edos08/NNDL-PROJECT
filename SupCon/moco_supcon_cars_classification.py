@@ -1,12 +1,14 @@
 from torchvision import transforms
-from tqdm.contrib.telegram import trange, tqdm
+from tqdm import trange, tqdm
 
 # from custom files
-from dataset import CompCarsImageFolder, WrapperDataset, TwoCropTransform
+from supcon_dataset import CompCarsImageFolder, WrapperDataset, TwoCropTransform, CIFAR10Instance
 from resnet import ResNet, resnet_cfg
 from moco_supcon import MoCo, train
 from losses import SupLoss
 from utils import *
+
+os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
 # DEFAULT PATHS
 root = '/home/ubuntu/data/image/'
@@ -16,28 +18,28 @@ test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
 resnet_type = 'resnet18'  # 'resnet18', 'resnet34', 'resnet50'
 
 params = {
+    'resnet': resnet_cfg[resnet_type],  # ResNet configuration
+
     # Training Params (inspired from original resnet paper: https://arxiv.org/pdf/1512.03385)
-    'epoch_num': 50,                    # number of epochs
-    'lr': 1e-1,                         # (initial) Learning Rate
+    'epoch_num': 125,                   # number of epochs
+    'lr': 0.1,                          # (initial) Learning Rate
     'weight_decay': 1e-4,               # L2 Penalty
     'batch_size': 256,                  # batch size (depends on hardware)
-    'momentum': 0.9,
+    'momentum': 0.9,                    # SGD momentum
+    'warm_up': 5,                       # number of warm-up epochs
+
+    # MoCo Params (inspired from original MoCo paper: https://arxiv.org/abs/1911.05722)
+    'moco_dim': 128,                    # feature dimension
+    'moco_k': 1024,                     # queue size (carmaker: 1024, car model: 8192)
+    'moco_m': 0.999,                    # momentum for updating key encoder
+    'moco_t': 0.1,                      # temperature parameter (commonly 0.07 or 0.1)
+    'mlp': False,                       # use mlp head
 
     'hierarchy': 0,                     # Choose 0 for manufacturer classification, 1 for model classification
     'val_split': 10000,                 # (float) Fraction of validation holdout / (int) Absolute number of data points in holdout
-
-    'resnet': resnet_cfg[resnet_type],  # ResNet configuration
-
     'use_train_test_split': False,      # True: use prepared split, False: use total dataset
 
-    'use_amp': False,                   # Automatic Mixed Precision (AMP) for faster training on NVIDIA GPUs
-
-    # TO DO
-    'moco_dim': 128,
-    'moco_k': 1024,                     # queue size (carmaker: 1024, car model: 8192)
-    'moco_m': 0.999,
-    'moco_t': 0.2,                      # temperature parameter
-    'mlp': True
+    'seed': 28,                         # for reproducibility (NOTE: may be still non-deterministic for multithreaded/multiprocess stuff, e.g. DataLoader)
 }
 
 
@@ -61,7 +63,7 @@ def set_loader() -> dict[str, DataLoader]:
     # Load full dataset
     # hierarchy=0 -> manufacturer classification; hierarchy=1 -> model classification
     total_set = CompCarsImageFolder(root, hierarchy=params['hierarchy'])
-    datasets = train_val_dataset(total_set, val_split=params['val_split'])
+    datasets = train_val_dataset(total_set, val_split=params['val_split'], seed=params['seed'])
 
     # default (computed statistic on whole dataset)
     mean, std = [0.483, 0.471, 0.463], [0.297, 0.296, 0.302]
@@ -100,14 +102,30 @@ def set_loader() -> dict[str, DataLoader]:
         ])
     }
 
+    # FOR TEST PURPOSES
+    # augmentation = [
+    #     transforms.RandomResizedCrop(32, scale=(0.2, 1.)),
+    #     # transforms.RandomChoice([
+    #     #     transforms.Resize(256),
+    #     #     transforms.Resize(224),
+    #     #     transforms.Resize(320)
+    #     # ]),
+    #     # transforms.RandomCrop(224),
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
+    #     transforms.ToTensor(),
+    #     transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
+    #                                 std=[0.2023, 0.1994, 0.2010])
+    # ]
+
     wrapped_datasets = {
         'train': WrapperDataset(datasets['train'], transform=TwoCropTransform(data_transforms['train'])),
         'val': WrapperDataset(datasets['val'], transform=data_transforms['val'])
     }
 
     dataloaders = {
-        'train': DataLoader(wrapped_datasets['train'], batch_size=params['batch_size'], shuffle=True, num_workers=4, drop_last=True),
-        'val': DataLoader(wrapped_datasets['val'], batch_size=params['batch_size'], shuffle=False, num_workers=4)
+        'train': DataLoader(wrapped_datasets['train'], batch_size=params['batch_size'], shuffle=True, num_workers=os.cpu_count(), drop_last=True),
+        'val': DataLoader(wrapped_datasets['val'], batch_size=params['batch_size'], shuffle=False, num_workers=os.cpu_count())
     }
 
     print(f"Training dataset size: {len(wrapped_datasets['train'])}")
@@ -117,28 +135,41 @@ def set_loader() -> dict[str, DataLoader]:
     print(f"Batch of training images shape: {x[0].shape}")
     print(f"Batch of training labels shape: {y.shape}")
 
+
+    # train_dataset = CIFAR10Instance(root="./cifar10", train=True, download=True,
+    #                                          transform=TwoCropTransform(transforms.Compose(augmentation)))
+    # eval_dataset = datasets.CIFAR10Instance(root="./cifar10", train=False, download=True,
+    #                                         transform=transforms.Compose(data_transforms['val']))
+
+    # train_loader = torch.utils.data.DataLoader(
+    #     train_dataset, batch_size=params['batch_size'], shuffle=True,
+    #     num_workers=15, pin_memory=True, drop_last=True)
+    # eval_loader = torch.utils.data.DataLoader(
+    #     eval_dataset, batch_size=args.batch_size, shuffle=False,
+    #     num_workers=args.workers, pin_memory=True, sampler=eval_sampler)
+
+
     return dataloaders
 
 
-def set_model(dataloaders: dict[str, Any]) -> tuple[MoCo, SupLoss]:
+def set_model(train_loader) -> tuple[MoCo, SupLoss]:
     # create model
-    encoder = ResNet(params['resnet']['block'], params['resnet']['layers'], num_classes=params['moco_dim'])
-
-    model = MoCo(encoder, 
+    model = MoCo(params['resnet']['block'],
+                 params['resnet']['layers'],
                  dim=params['moco_dim'], 
                  K=params['moco_k'], 
                  m=params['moco_m'], 
                  T=params['moco_t'], 
                  mlp=params['mlp'])
 
-    model.to(params['device'])
-
-    for _, labels, index in tqdm(dataloaders['train'], miniters=1):
-        labels = labels.to(params['device'])
-        index = index.to(params['device'])
+    for _, labels, index in tqdm(train_loader, mininterval=0.01):
+        # labels = labels.to(params['device'])
+        # index = index.to(params['device'])
         model._init_label_information(index, labels)
 
     model._show_label_information()
+
+    model.to(params['device'])
 
     # Loss and Optimizer
     criterion = SupLoss(temperature=params['moco_t'], K=params['moco_k']).to(params['device'])
@@ -154,9 +185,15 @@ def set_optimizer(model) -> tuple[torch.optim.SGD, torch.optim.lr_scheduler.Redu
         momentum=params['momentum']
     )
 
+    # optimizer = torch.optim.Adam(
+    #     model.parameters(),
+    #     lr=params['lr'],
+    #     weight_decay=params['weight_decay']
+    # )
+
     # LR scheduler (using Loss as Validation metric)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, min_lr=1e-4, patience=3,
-                                                           threshold=1e-3)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, min_lr=1e-4, patience=5,
+                                                           threshold=1e-4)
     return optimizer, scheduler
 
 
@@ -180,19 +217,25 @@ def save_model(model: MoCo, optimizer: torch.optim, epoch: int, train_losses: li
 
 
 def main():
+    # !!! NOTE: REMEMBER TO PASS SEED TO train_val_dataset FUNCTION AS ARGUMENT !!! 
+    fix_all_seeds(seed=params['seed'])
+
     set_device()
 
     dataloaders = set_loader()
 
-    model, criterion = set_model(dataloaders)
+    # train_loader = dataloaders
+    train_loader = dataloaders['train']
+
+    model, criterion = set_model(train_loader)
 
     optimizer, scheduler = set_optimizer(model)
 
     # Save performance metrics
     train_losses = list()
 
-    CHECKPOINT_PATH = './training_checkpoints/checkpoint.pth'
-    START_FROM_CHECKPOINT = False  # set to TRUE to start from checkpoint
+    CHECKPOINT_PATH = './training_checkpoints/moco_checkpoint.pth'
+    START_FROM_CHECKPOINT = True  # set to TRUE to start from checkpoint
     start_epoch = 0
 
     if START_FROM_CHECKPOINT:
@@ -203,32 +246,34 @@ def main():
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         train_losses = checkpoint['train_losses']
 
-    # Just some fancy progress bars # FIXME: inside epoch progress bar not working reliably for me
+    # Just some fancy progress bars
+    # token = "7201508620:AAFKipOQ7_Xdcgid1xDf60fCCkJuKAcPVBw"
+    # chat_id = "-4239730104"
+
     pbar_epoch = trange(start_epoch, params["epoch_num"], initial=start_epoch, total=params["epoch_num"],
                         desc="Training", unit="epoch", position=0, leave=True,
-                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]",
-                        token="7201508620:AAFKipOQ7_Xdcgid1xDf60fCCkJuKAcPVBw", chat_id="-4239730104")
-    pbar_inside_epoch = trange(0, len(dataloaders['train']), desc="Training per epoch", position=1, leave=False,
-                               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]",
-                               token="7201508620:AAFKipOQ7_Xdcgid1xDf60fCCkJuKAcPVBw", chat_id="-4239730104")
+                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]")
+    pbar_inside_epoch = trange(0, len(train_loader), desc="Training per epoch", position=1, leave=False,
+                               bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]")
 
     for epoch in pbar_epoch:
         pbar_inside_epoch.reset()
 
         # Training
-        train_results = train(dataloaders['train'], model, epoch, criterion, optimizer, params["device"],
-                              pbar=pbar_inside_epoch)
+        train_results = train(train_loader, model, criterion, optimizer, epoch, params['epoch_num'],
+                              params['lr'], params['warm_up'], params["device"], params['batch_size'], pbar=pbar_inside_epoch)
         train_losses.append(train_results)
 
         # ReduceLROnPlateau scheduler (reduce LR by 10 when loss does not improve)
-        scheduler.step(train_results)
-        print("\nCurrent Learning Rate: ", round(scheduler.get_last_lr()[0], 4), "\n")
+        #scheduler.step(train_results)
+        #print("\nCurrent Learning Rate: ", round(scheduler.get_last_lr()[0], 4), "\n")
 
         # Checkpoint
         torch.save({
             'epoch': epoch + 1,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
             'train_losses': train_losses,
         }, CHECKPOINT_PATH)
 
