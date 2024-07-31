@@ -175,32 +175,6 @@ def compute_mean_std(loader: DataLoader) -> tuple:
     return mean, std
 
 
-def compute_mean_std_from_images(images: list) -> tuple:
-    """
-    Compute the mean and standard deviation from a list of images
-
-    Args:
-        images (list): Dataset loader to compute the mean and standard deviation
-    """
-
-    mean = np.zeros(3)
-    std = np.zeros(3)
-
-    for image in images:
-        average_color_row = np.average(image, axis=0)
-        average_color = np.average(average_color_row, axis=0)
-        mean = mean + average_color
-
-    for image in images:
-        for i in range(3):
-            std[i] = std[i] + ((image[:, :, i] - mean[i]) ** 2).sum() / (image.shape[0] * image.shape[1])
-
-    mean = mean / len(images)
-    std = np.sqrt(std / len(images))
-
-    return mean, std
-
-
 def train_val_dataset(dataset: Dataset, val_split: int | float = 0.2, seed: int = 0) -> dict[str, Subset[Any]]:
     train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split, random_state=seed)
     datasets = {'train': Subset(dataset, train_idx), 'val': Subset(dataset, val_idx)}
@@ -215,60 +189,6 @@ def show_grid(images, labels):
     plt.show()
     # TO BE FIXED
     # print(' '.join(f'{label_dict[labels[j].item()]}' for j in range(len(labels))))
-
-
-def read_images(path: str) -> list:
-    """
-    Read images from a parent path and return a list of images
-
-    Args:
-        path (str): path to images
-    """
-    data = list()
-
-    directories = list()
-
-    for dir_name, _, _ in os.walk(path):
-        directories.append(dir_name)
-
-    for dir_name, _, filenames in os.walk(path):
-        if len(directories) > 1:
-            for filename in filenames:
-                if filename.endswith(('.jpg', '.jpeg', '.png')):
-                    label = dir_name.split("/")[-1]
-                    image = os.path.join(dir_name, filename)
-                    data.append((label, image))
-        else:
-            for filename in filenames:
-                if filename.endswith(('.jpg', '.jpeg', '.png')):
-                    label = filename.split("_")[0]
-                    image = os.path.join(dir_name, filename)
-                    data.append((label, image))
-
-    return data
-
-
-class ImagesLabelsDataset(Dataset):
-    """
-    Custom dataset for loading images and labels from a list of images and labels
-    """
-
-    def __init__(self, images_array, labels_array, transforms=None):
-        self.labels = labels_array
-        self.images = images_array
-        self.transforms = transforms
-
-    def __getitem__(self, idx):
-        image = self.images[idx]
-        label = self.labels[idx]
-
-        if self.transforms is not None:
-            image = self.transforms(image)
-
-        return image, label
-
-    def __len__(self):
-        return len(self.labels)
 
 
 class EarlyStopper:
