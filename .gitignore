@@ -5,3 +5,4 @@ venv/
 __pycache__/
 training_checkpoints/
 .vscode/
+*.pth
