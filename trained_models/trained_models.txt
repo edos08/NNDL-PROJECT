@@ -1,0 +1,3 @@
+Here you can find the link for the Google Drive folder to download the trained models:
+
+https://drive.google.com/drive/folders/16356MEZVgsxfDQACC-AmDa6aeoCiHEUD?usp=share_link
