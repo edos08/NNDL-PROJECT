@@ -2,8 +2,10 @@ import torch
 import torch.nn as nn
 import numpy as np
 import time
+import math
 from torch.utils.data import DataLoader
 from tqdm.contrib.telegram import tqdm
+from resnet import ResNet
 
 
 class MoCo(nn.Module):
@@ -11,7 +13,7 @@ class MoCo(nn.Module):
     Build a MoCo model with: a query encoder, a key encoder, and a queue
     https://arxiv.org/abs/1911.05722
     """
-    def __init__(self, base_encoder, dim=128, K=65536, m=0.999, T=0.07, mlp=False):
+    def __init__(self, block, layers, dim=128, K=65536, m=0.999, T=0.07, mlp=False):
         """
         dim: feature dimension (default: 128)
         K: queue size; number of negative keys (default: 65536)
@@ -26,8 +28,8 @@ class MoCo(nn.Module):
 
         # create the encoders
         # num_classes is the output fc dimension
-        self.encoder_q = base_encoder
-        self.encoder_k = base_encoder
+        self.encoder_q = ResNet(block=block, layers=layers, num_classes=dim)
+        self.encoder_k = ResNet(block=block, layers=layers, num_classes=dim)
 
         hidden_dim = 512
 
@@ -122,8 +124,8 @@ class MoCo(nn.Module):
         labels = self.label_labeled_queue[index]  # correspondence target  B
         queue_l = self.label_labeled_queue[self.index_queue]
         # compute logits
-        features = torch.cat((q, k, self.queue.clone().detach().t()), dim=0).requires_grad_(True)
-        target = torch.cat((labels, labels, queue_l.clone().detach()), dim=0).requires_grad_(False)
+        features = torch.cat((q, k, self.queue.clone().detach().t()), dim=0)
+        target = torch.cat((labels, labels, queue_l.clone().detach()), dim=0)
 
         # dequeue and enqueue
         self._dequeue_and_enqueue(k, index)
@@ -131,8 +133,8 @@ class MoCo(nn.Module):
         return features, target
     
 
-def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None) -> float:
+def train(train_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, optimizer: torch.optim,
+          epoch: int, total_epochs: int, lr: float, warm_up, device, batch_size, pbar: tqdm = None) -> float:
     """
     Train a model on the provided training dataset
 
@@ -151,13 +153,17 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
 
     epoch_loss = np.array([])
 
-    for images, _, index in train_loader:
+    iteration_per_epoch = len(train_loader)
+
+    for i, (images, _, index) in enumerate(train_loader):
+        adjust_learning_rate(optimizer, lr, warm_up, epoch, total_epochs, i, iteration_per_epoch)
+
         # GPU casting
-        images[0] = images[0].to(device)
-        images[1] = images[1].to(device)
+        images[0] = images[0].to(device, non_blocking=True)
+        images[1] = images[1].to(device, non_blocking=True)
         index = index.to(device)
 
-        if images[0].shape[0] != 256:
+        if images[0].shape[0] != batch_size:
             print("Batch size is not 256, skipping batch: ", images[0].shape[0])
             continue
 
@@ -182,7 +188,23 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
 
     print("\n-- TRAINING --")
     print("Epoch: ", epoch + 1, "\n"
-          " - Loss: ", epoch_loss_mean, " +- ", epoch_loss_std, "\n "
+          " - Loss: ", epoch_loss_mean, " +- ", epoch_loss_std, "\n"
           " - Time: ", end - start, "s")
 
     return epoch_loss_mean
+
+
+def adjust_learning_rate(optimizer, lr, warm_up, epoch, total_epochs, i, iteration_per_epoch):
+    base_lr = lr
+    T = epoch * iteration_per_epoch + i
+    warmup_iters = warm_up * iteration_per_epoch
+    total_iters = (total_epochs - warm_up) * iteration_per_epoch
+
+    if epoch < warm_up:
+        lr = base_lr * 1.0 * T / warmup_iters
+    else:
+        T = T - warmup_iters
+        lr = 0.5 * base_lr * (1 + math.cos(1.0 * T / total_iters * math.pi))
+    
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
