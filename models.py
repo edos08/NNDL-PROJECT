@@ -410,6 +410,7 @@ def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, 
             loss = criterion(pred_label, label)
             losses = np.append(losses, loss.cpu().data)
 
+            # Accuracy
             batch_acc = top_k_accuracy(label, pred_label, k=1)
             batch_top5_acc = top_k_accuracy(label, pred_label, k=5)
 
