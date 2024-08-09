@@ -8,8 +8,8 @@ from tqdm.notebook import trange
 
 # from custom files
 from dataset import CompCarsImageFolder, WrapperDataset
-from models import ResNet, resnet_cfg
-from models import train, validate
+from resnet import ResNet, resnet_cfg
+from resnet import train, validate
 from utils import fix_all_seeds, train_val_dataset, compute_mean_std_from_dataset
 
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'

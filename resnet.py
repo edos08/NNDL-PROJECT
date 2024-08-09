@@ -304,12 +304,12 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
           "- Top-1-Accuracy: {:.2f}\n "
           "- Top-5-Accuracy: {:.2f}\n "
           "- Time: {:.2f}s".format(
-            epoch + 1,
-            epoch_loss_mean,
-            epoch_loss_std,
-            epoch_acc,
-            epoch_top5_acc,
-            end - start))
+        epoch + 1,
+        epoch_loss_mean,
+        epoch_loss_std,
+        epoch_acc,
+        epoch_top5_acc,
+        end - start))
 
     return epoch_loss_mean, epoch_acc, epoch_top5_acc
 
@@ -381,7 +381,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
         return epoch_loss.mean(), epoch_acc, epoch_top5_acc
 
 
-def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, device) -> tuple:
+def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, device, pbar: tqdm = None) -> tuple:
     """
     Test a model on the provided test dataset
 
@@ -416,6 +416,9 @@ def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, 
 
             acc = np.append(acc, batch_acc)
             top5_acc = np.append(top5_acc, batch_top5_acc)
+
+            if pbar is not None:
+                pbar.update(1)
 
         losses_mean = losses.mean()
         losses_std = losses.std()
