@@ -15,7 +15,7 @@ root = '/home/ubuntu/data/image/'
 train_file = '/home/ubuntu/data/train_test_split/classification/train.txt'
 test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
 
-resnet_type = 'resnet18'  # 'resnet18', 'resnet34', 'resnet50'
+resnet_type = 'resnet50'  # 'resnet18', 'resnet34', 'resnet50'
 
 params = {
     'resnet': resnet_cfg[resnet_type],  # ResNet configuration
@@ -30,12 +30,12 @@ params = {
 
     # MoCo Params (inspired from original MoCo paper: https://arxiv.org/abs/1911.05722)
     'moco_dim': 128,                    # feature dimension
-    'moco_k': 1024,                     # queue size (carmaker: 1024, car model: 8192)
+    'moco_k': 16384,                    # queue size (carmaker: 4096, car model: 16384)
     'moco_m': 0.999,                    # momentum for updating key encoder
     'moco_t': 0.1,                      # temperature parameter (commonly 0.07 or 0.1)
-    'mlp': False,                       # use mlp head
+    'mlp': True,                        # use mlp head
 
-    'hierarchy': 0,                     # Choose 0 for manufacturer classification, 1 for model classification
+    'hierarchy': 1,                     # Choose 0 for manufacturer classification, 1 for model classification
     'val_split': 10000,                 # (float) Fraction of validation holdout / (int) Absolute number of data points in holdout
     'use_train_test_split': False,      # True: use prepared split, False: use total dataset
 
@@ -66,19 +66,19 @@ def set_loader() -> dict[str, DataLoader]:
     datasets = train_val_dataset(total_set, val_split=params['val_split'], seed=params['seed'])
 
     # default (computed statistic on whole dataset)
-    mean, std = [0.483, 0.471, 0.463], [0.297, 0.296, 0.302]
+    # mean, std = [0.483, 0.471, 0.463], [0.297, 0.296, 0.302]
 
     # Compute mean and std for training dataset
     # train_mean, train_std = compute_mean_std_from_dataset(datasets['train'])
     # print(f"Training dataset mean: {train_mean}")
     # print(f"Training dataset std: {train_std}")
-    train_mean, train_std = mean, std
+    train_mean, train_std = [0.4836, 0.4714, 0.4633], [0.2968, 0.2955, 0.3022]
 
     # Compute mean and std for validation dataset
     # val_mean, val_std = compute_mean_std_from_dataset(datasets['val'])
     # print(f"Validation dataset mean: {val_mean}")
     # print(f"Validation dataset std: {val_std}")
-    val_mean, val_std = mean, std
+    val_mean, val_std = [0.4818, 0.4693, 0.4610], [0.2966, 0.2954, 0.3021]
 
     # inspired from https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
     data_transforms = {
@@ -102,22 +102,6 @@ def set_loader() -> dict[str, DataLoader]:
         ])
     }
 
-    # FOR TEST PURPOSES
-    # augmentation = [
-    #     transforms.RandomResizedCrop(32, scale=(0.2, 1.)),
-    #     # transforms.RandomChoice([
-    #     #     transforms.Resize(256),
-    #     #     transforms.Resize(224),
-    #     #     transforms.Resize(320)
-    #     # ]),
-    #     # transforms.RandomCrop(224),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-    #     transforms.ToTensor(),
-    #     transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
-    #                                 std=[0.2023, 0.1994, 0.2010])
-    # ]
-
     wrapped_datasets = {
         'train': WrapperDataset(datasets['train'], transform=TwoCropTransform(data_transforms['train'])),
         'val': WrapperDataset(datasets['val'], transform=data_transforms['val'])
@@ -134,20 +118,6 @@ def set_loader() -> dict[str, DataLoader]:
     x, y, _ = next(iter(dataloaders['train']))
     print(f"Batch of training images shape: {x[0].shape}")
     print(f"Batch of training labels shape: {y.shape}")
-
-
-    # train_dataset = CIFAR10Instance(root="./cifar10", train=True, download=True,
-    #                                          transform=TwoCropTransform(transforms.Compose(augmentation)))
-    # eval_dataset = datasets.CIFAR10Instance(root="./cifar10", train=False, download=True,
-    #                                         transform=transforms.Compose(data_transforms['val']))
-
-    # train_loader = torch.utils.data.DataLoader(
-    #     train_dataset, batch_size=params['batch_size'], shuffle=True,
-    #     num_workers=15, pin_memory=True, drop_last=True)
-    # eval_loader = torch.utils.data.DataLoader(
-    #     eval_dataset, batch_size=args.batch_size, shuffle=False,
-    #     num_workers=args.workers, pin_memory=True, sampler=eval_sampler)
-
 
     return dataloaders
 
@@ -198,12 +168,17 @@ def set_optimizer(model) -> tuple[torch.optim.SGD, torch.optim.lr_scheduler.Redu
 
 
 def save_model(model: MoCo, optimizer: torch.optim, epoch: int, train_losses: list):
-    MODEL_PATH = './trained_models/pretrained_moco_weights_car_'
+    MODEL_PATH = './trained_models/pretrained_moco_' + resnet_type + '_weights_car_'
 
     if params['hierarchy'] == 0:
         MODEL_PATH += 'makers_'
     else:
         MODEL_PATH += 'models_'
+
+    if params['mlp']:
+        MODEL_PATH += 'mlp_'
+    else:
+        MODEL_PATH += 'nomlp_'
         
     MODEL_PATH += str(params['batch_size']) + '.pth'
 
@@ -235,7 +210,7 @@ def main():
     train_losses = list()
 
     CHECKPOINT_PATH = './training_checkpoints/moco_checkpoint.pth'
-    START_FROM_CHECKPOINT = True  # set to TRUE to start from checkpoint
+    START_FROM_CHECKPOINT = False  # set to TRUE to start from checkpoint
     start_epoch = 0
 
     if START_FROM_CHECKPOINT:

@@ -13,8 +13,9 @@ os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 root = '/home/ubuntu/data/image/'
 train_file = '/home/ubuntu/data/train_test_split/classification/train.txt'
 test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
+pretrained_model = './trained_models/pretrained_moco_resnet50_weights_car_models_mlp_256.pth'
 
-resnet_type = 'resnet18'  # 'resnet18', 'resnet34', 'resnet50'
+resnet_type = 'resnet50'  # 'resnet18', 'resnet34', 'resnet50'
 
 params = {
     'resnet': resnet_cfg[resnet_type],  # ResNet configuration
@@ -29,12 +30,12 @@ params = {
 
     # MoCo Params (inspired from original MoCo paper: https://arxiv.org/abs/1911.05722)
     'moco_dim': 128,                    # feature dimension
-    'moco_k': 1024,                     # queue size (carmaker: 1024, car model: 8192)
+    'moco_k': 16384,                    # queue size (carmaker: 4096, car model: 16384)
     'moco_m': 0.999,                    # momentum for updating key encoder
     'moco_t': 0.1,                      # temperature parameter (commonly 0.07 or 0.1)
     'mlp': False,                       # use mlp head
 
-    'hierarchy': 0,                     # Choose 0 for manufacturer classification, 1 for model classification
+    'hierarchy': 1,                     # Choose 0 for manufacturer classification, 1 for model classification
     'val_split': 10000,                 # (float) Fraction of validation holdout / (int) Absolute number of data points in holdout
     'use_train_test_split': False,      # True: use prepared split, False: use total dataset
 
@@ -65,19 +66,19 @@ def set_loader() -> tuple[int, dict[str, DataLoader]]:
     datasets = train_val_dataset(total_set, val_split=params['val_split'], seed=params['seed'])
 
     # default (computed statistic on whole dataset)
-    mean, std = [0.483, 0.471, 0.463], [0.297, 0.296, 0.302]
+    # mean, std = [0.483, 0.471, 0.463], [0.297, 0.296, 0.302]
 
     # Compute mean and std for training dataset
     # train_mean, train_std = compute_mean_std_from_dataset(datasets['train'])
     # print(f"Training dataset mean: {train_mean}")
     # print(f"Training dataset std: {train_std}")
-    train_mean, train_std = mean, std
+    train_mean, train_std = [0.4836, 0.4714, 0.4633], [0.2968, 0.2955, 0.3022]
 
     # Compute mean and std for validation dataset
     # val_mean, val_std = compute_mean_std_from_dataset(datasets['val'])
     # print(f"Validation dataset mean: {val_mean}")
     # print(f"Validation dataset std: {val_std}")
-    val_mean, val_std = mean, std
+    val_mean, val_std = [0.4818, 0.4693, 0.4610], [0.2966, 0.2954, 0.3021]
 
     # inspired from https://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
     data_transforms = {
@@ -101,25 +102,6 @@ def set_loader() -> tuple[int, dict[str, DataLoader]]:
         ])
     }
 
-    # FOR TEST PURPOSES
-    # augmentation_train = [
-    #     transforms.RandomResizedCrop(32, scale=(0.2, 1.)),
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4),
-    #     transforms.ToTensor(),
-    #     transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
-    #                                 std=[0.2023, 0.1994, 0.2010])
-    # ]
-
-    # augmentation_val = [
-    #     transforms.Resize(256),
-    #     transforms.CenterCrop(224),
-    #     transforms.RandomResizedCrop(32, scale=(0.2, 1.)),
-    #     transforms.ToTensor(),
-    #     transforms.Normalize(mean=[0.4914, 0.4822, 0.4465],
-    #                                 std=[0.2023, 0.1994, 0.2010])
-    # ]
-
     wrapped_datasets = {
         'train': WrapperDataset(datasets['train'], transform=data_transforms['train']),
         'val': WrapperDataset(datasets['val'], transform=data_transforms['val'])
@@ -140,20 +122,6 @@ def set_loader() -> tuple[int, dict[str, DataLoader]]:
     x, y, _ = next(iter(dataloaders['val']))
     print(f"Batch of validation images shape: {x.shape}")
     print(f"Batch of validation labels shape: {y.shape}")
-
-    # train_dataset = CIFAR10Instance(root="./cifar10", train=True, download=True,
-    #                                          transform=transforms.Compose(augmentation_train))
-    # eval_dataset = CIFAR10Instance(root="./cifar10", train=False, download=True,
-    #                                         transform=transforms.Compose(augmentation_val))
-
-    # print("CPU count: ", os.cpu_count())
-
-    # train_loader = torch.utils.data.DataLoader(
-    #     train_dataset, batch_size=params['batch_size'], shuffle=True,
-    #     num_workers=4*os.cpu_count(), pin_memory=True, drop_last=True)
-    # eval_loader = torch.utils.data.DataLoader(
-    #     eval_dataset, batch_size=params['batch_size'], shuffle=False,
-    #     num_workers=4*os.cpu_count(), pin_memory=True)
 
     return len(total_set.classes), dataloaders
 
@@ -191,6 +159,7 @@ def set_model(num_classes: int, path: str) -> tuple[ResNet, nn.CrossEntropyLoss]
         print("=> loaded pre-trained model '{}'".format(path))
     else:
         print("=> no checkpoint found at '{}'".format(path))
+        raise Exception("Pre-trained model not found")
 
     # load the model to the device
     model.to(params['device'])
@@ -220,17 +189,17 @@ def set_optimizer(model) -> tuple[torch.optim.SGD, torch.optim.lr_scheduler.Redu
 
 
 def save_model(model, train_losses, train_acc, train_top5_acc, validation_losses, validation_acc, validation_top5_acc):
-    MODEL_PATH = './trained_models/' + resnet_type + '_moco_weights_car_'
+    MODEL_PATH = './trained_models/lin_moco_' + resnet_type + '_weights_car_'
 
     if params['hierarchy'] == 0:
         MODEL_PATH += 'makers_'
     else:
         MODEL_PATH += 'models_'
-        
-    if params['use_train_test_split']:
-        MODEL_PATH += 'prepared_dataset_'
+
+    if params['mlp']:
+        MODEL_PATH += 'mlp_'
     else:
-        MODEL_PATH += 'full_dataset_'
+        MODEL_PATH += 'nomlp_'
         
     MODEL_PATH += str(params['batch_size']) + '.pth'
 
@@ -242,7 +211,7 @@ def save_model(model, train_losses, train_acc, train_top5_acc, validation_losses
         'validation_losses': validation_losses,
         'validation_acc': validation_acc,
         'validation_top5_acc': validation_top5_acc,
-        'resnet': params['resnet'],
+        'params': params,
         }, MODEL_PATH)
 
 
@@ -257,7 +226,7 @@ def main():
     train_loader = dataloaders['train']
     val_loader = dataloaders['val']
 
-    model, criterion = set_model(num_classes, path='./trained_models/pretrained_moco_weights_car_makers_256.pth')
+    model, criterion = set_model(num_classes, path=pretrained_model)
 
     optimizer, scheduler = set_optimizer(model)
 
