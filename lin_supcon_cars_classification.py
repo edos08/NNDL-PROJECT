@@ -1,19 +1,24 @@
 from torchvision import transforms
-from tqdm import trange, tqdm
+from tqdm import trange
+import torch.nn as nn
 
 # from custom files
-from supcon_dataset import CompCarsImageFolder, WrapperDataset, TwoCropTransform, CIFAR10Instance
-from resnet import ResNet, resnet_cfg
-from moco_supcon import MoCo, train
-from losses import SupLoss
-from utils import *
+from others.dataset import CompCarsImageFolder, WrapperDataset
+from models.resnet import ResNet, resnet_cfg, train, validate
+from others.utils import *
 
 os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8'
 
+# EDO'S PATHS
+root = '/Volumes/EDO/NNDL/CompCars dataset/data/image/'
+train_file = '/Volumes/EDO/NNDL/CompCars dataset/data/train_test_split/classification/train.txt'
+test_file = '/Volumes/EDO/NNDL/CompCars dataset/data/train_test_split/classification/test.txt'
+
 # DEFAULT PATHS
-root = '/home/ubuntu/data/image/'
-train_file = '/home/ubuntu/data/train_test_split/classification/train.txt'
-test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
+# root = '/home/ubuntu/data/image/'
+# train_file = '/home/ubuntu/data/train_test_split/classification/train.txt'
+# test_file = '/home/ubuntu/data/train_test_split/classification/test.txt'
+pretrained_model = './trained_models/pretrained_moco_resnet50_weights_car_makers_mlp_256.pth'
 
 resnet_type = 'resnet50'  # 'resnet18', 'resnet34', 'resnet50'
 
@@ -21,7 +26,7 @@ params = {
     'resnet': resnet_cfg[resnet_type],  # ResNet configuration
 
     # Training Params (inspired from original resnet paper: https://arxiv.org/pdf/1512.03385)
-    'epoch_num': 125,                   # number of epochs
+    'epoch_num': 20,                    # number of epochs
     'lr': 0.1,                          # (initial) Learning Rate
     'weight_decay': 1e-4,               # L2 Penalty
     'batch_size': 256,                  # batch size (depends on hardware)
@@ -33,7 +38,7 @@ params = {
     'moco_k': 16384,                    # queue size (carmaker: 4096, car model: 16384)
     'moco_m': 0.999,                    # momentum for updating key encoder
     'moco_t': 0.1,                      # temperature parameter (commonly 0.07 or 0.1)
-    'mlp': True,                        # use mlp head
+    'mlp': False,                       # use mlp head
 
     'hierarchy': 1,                     # Choose 0 for manufacturer classification, 1 for model classification
     'val_split': 10000,                 # (float) Fraction of validation holdout / (int) Absolute number of data points in holdout
@@ -59,7 +64,7 @@ def set_device():
     print("Device: {}".format(params["device"]))
 
 
-def set_loader() -> dict[str, DataLoader]:
+def set_loader() -> tuple[int, dict[str, DataLoader]]:
     # Load full dataset
     # hierarchy=0 -> manufacturer classification; hierarchy=1 -> model classification
     total_set = CompCarsImageFolder(root, hierarchy=params['hierarchy'])
@@ -103,7 +108,7 @@ def set_loader() -> dict[str, DataLoader]:
     }
 
     wrapped_datasets = {
-        'train': WrapperDataset(datasets['train'], transform=TwoCropTransform(data_transforms['train'])),
+        'train': WrapperDataset(datasets['train'], transform=data_transforms['train']),
         'val': WrapperDataset(datasets['val'], transform=data_transforms['val'])
     }
 
@@ -119,35 +124,62 @@ def set_loader() -> dict[str, DataLoader]:
     print(f"Batch of training images shape: {x[0].shape}")
     print(f"Batch of training labels shape: {y.shape}")
 
-    return dataloaders
+    x, y, _ = next(iter(dataloaders['val']))
+    print(f"Batch of validation images shape: {x.shape}")
+    print(f"Batch of validation labels shape: {y.shape}")
+
+    return len(total_set.classes), dataloaders
 
 
-def set_model(train_loader) -> tuple[MoCo, SupLoss]:
+def set_model(num_classes: int, path: str) -> tuple[ResNet, nn.CrossEntropyLoss]:
     # create model
-    model = MoCo(params['resnet']['block'],
-                 params['resnet']['layers'],
-                 dim=params['moco_dim'], 
-                 K=params['moco_k'], 
-                 m=params['moco_m'], 
-                 T=params['moco_t'], 
-                 mlp=params['mlp'])
+    model = ResNet(params['resnet']['block'], params['resnet']['layers'], num_classes)
 
-    for _, labels, index in tqdm(train_loader, mininterval=0.01):
-        # labels = labels.to(params['device'])
-        # index = index.to(params['device'])
-        model._init_label_information(index, labels)
+    # freeze all layers but the last fc
+    for name, param in model.named_parameters():
+        if name not in ['fc.weight', 'fc.bias']:
+            param.requires_grad = False
+    # init the fc layer
+    model.fc.weight.data.normal_(mean=0.0, std=0.01)
+    model.fc.bias.data.zero_()
 
-    model._show_label_information()
+    # load from pre-trained, before DistributedDataParallel constructor
+    if os.path.isfile(path):
+        print("=> loading pre-trained model '{}'".format(path))
+        checkpoint = torch.load(path, map_location="cpu")
 
+        # rename moco pre-trained keys
+        state_dict = checkpoint['model_state_dict']
+        for k in list(state_dict.keys()):
+            # retain only encoder_q up to before the embedding layer
+            if k.startswith('encoder_q') and not k.startswith('encoder_q.fc'):
+                # remove prefix
+                state_dict[k[len("encoder_q."):]] = state_dict[k]
+            # delete renamed or unused k
+            del state_dict[k]
+
+        msg = model.load_state_dict(state_dict, strict=False)
+        assert set(msg.missing_keys) == {"fc.weight", "fc.bias"}
+
+        print("=> loaded pre-trained model '{}'".format(path))
+    else:
+        print("=> no checkpoint found at '{}'".format(path))
+        raise Exception("Pre-trained model not found")
+
+    # load the model to the device
     model.to(params['device'])
 
     # Loss and Optimizer
-    criterion = SupLoss(temperature=params['moco_t'], K=params['moco_k']).to(params['device'])
+    criterion = nn.CrossEntropyLoss().to(params['device'])
 
     return model, criterion
 
 
 def set_optimizer(model) -> tuple[torch.optim.SGD, torch.optim.lr_scheduler.ReduceLROnPlateau]:
+    # optimize only the linear classifier
+    parameters = list(filter(lambda p: p.requires_grad, model.parameters()))
+    assert len(parameters) == 2  # fc.weight, fc.bias
+
     optimizer = torch.optim.SGD(
         model.parameters(),
         lr=params['lr'],
@@ -155,20 +187,14 @@ def set_optimizer(model) -> tuple[torch.optim.SGD, torch.optim.lr_scheduler.Redu
         momentum=params['momentum']
     )
 
-    # optimizer = torch.optim.Adam(
-    #     model.parameters(),
-    #     lr=params['lr'],
-    #     weight_decay=params['weight_decay']
-    # )
-
     # LR scheduler (using Loss as Validation metric)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.1, min_lr=1e-4, patience=5,
-                                                           threshold=1e-4)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', factor=0.1, min_lr=1e-4, patience=3,
+                                                           threshold=1e-3)
     return optimizer, scheduler
 
 
-def save_model(model: MoCo, optimizer: torch.optim, epoch: int, train_losses: list):
-    MODEL_PATH = './trained_models/pretrained_moco_' + resnet_type + '_weights_car_'
+def save_model(model, train_losses, train_acc, train_top5_acc, validation_losses, validation_acc, validation_top5_acc):
+    MODEL_PATH = './trained_models/lin_moco_' + resnet_type + '_weights_car_'
 
     if params['hierarchy'] == 0:
         MODEL_PATH += 'makers_'
@@ -183,11 +209,14 @@ def save_model(model: MoCo, optimizer: torch.optim, epoch: int, train_losses: li
     MODEL_PATH += str(params['batch_size']) + '.pth'
 
     torch.save({
-        'params': params,
         'model_state_dict': model.state_dict(),
-        'optimizer': optimizer,
-        'epoch': epoch,
-        'train_losses': train_losses
+        'train_losses': train_losses,
+        'train_acc': train_acc,
+        'train_top5_acc': train_top5_acc,
+        'validation_losses': validation_losses,
+        'validation_acc': validation_acc,
+        'validation_top5_acc': validation_top5_acc,
+        'params': params,
         }, MODEL_PATH)
 
 
@@ -197,19 +226,20 @@ def main():
 
     set_device()
 
-    dataloaders = set_loader()
+    num_classes, dataloaders = set_loader()
 
-    # train_loader = dataloaders
     train_loader = dataloaders['train']
+    val_loader = dataloaders['val']
 
-    model, criterion = set_model(train_loader)
+    model, criterion = set_model(num_classes, path=pretrained_model)
 
     optimizer, scheduler = set_optimizer(model)
 
     # Save performance metrics
-    train_losses = list()
+    train_losses, validation_losses, train_acc = list(), list(), list()
+    validation_acc, train_top5_acc, validation_top5_acc = list(), list(), list()
 
-    CHECKPOINT_PATH = './training_checkpoints/moco_checkpoint.pth'
+    CHECKPOINT_PATH = './training_checkpoints/lin_checkpoint.pth'
     START_FROM_CHECKPOINT = False  # set to TRUE to start from checkpoint
     start_epoch = 0
 
@@ -220,28 +250,39 @@ def main():
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         train_losses = checkpoint['train_losses']
+        train_acc = checkpoint['train_acc']
+        train_top5_acc = checkpoint['train_top5_acc']
+        validation_losses = checkpoint['validation_losses']
+        validation_acc = checkpoint['validation_acc']
+        validation_top5_acc = checkpoint['validation_top5_acc']
 
-    # Just some fancy progress bars
+    # Just some fancy progress bars with Telegram support for tracking training progress
     # token = "7201508620:AAFKipOQ7_Xdcgid1xDf60fCCkJuKAcPVBw"
     # chat_id = "-4239730104"
 
-    pbar_epoch = trange(start_epoch, params["epoch_num"], initial=start_epoch, total=params["epoch_num"],
-                        desc="Training", unit="epoch", position=0, leave=True,
-                        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]")
-    pbar_inside_epoch = trange(0, len(train_loader), desc="Training per epoch", position=1, leave=False,
+    pbar_epoch = trange(start_epoch, params["epoch_num"], initial=start_epoch, total=params["epoch_num"], desc="Training",
+                        unit="epoch", position=0, leave=True, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]")
+    pbar_inside_epoch = trange(0, (len(train_loader)+len(val_loader)), desc="Training and validation per epoch", position=1, leave=False,
                                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_inv_fmt}]")
 
     for epoch in pbar_epoch:
         pbar_inside_epoch.reset()
 
         # Training
-        train_results = train(train_loader, model, criterion, optimizer, epoch, params['epoch_num'],
-                              params['lr'], params['warm_up'], params["device"], params['batch_size'], pbar=pbar_inside_epoch)
-        train_losses.append(train_results)
+        train_results = train(train_loader, model, epoch, criterion, optimizer, params["device"], pbar=pbar_inside_epoch)
+        train_losses.append(train_results[0])
+        train_acc.append(1 - train_results[1])                 # saving acc error
+        train_top5_acc.append(1 - train_results[2])
+
+        # Validation
+        validation_results = validate(val_loader, model, epoch, criterion, params["device"], pbar=pbar_inside_epoch)
+        validation_losses.append(validation_results[0])
+        validation_acc.append(1 - validation_results[1])       # saving acc error
+        validation_top5_acc.append(1 - validation_results[2])
 
         # ReduceLROnPlateau scheduler (reduce LR by 10 when loss does not improve)
-        #scheduler.step(train_results)
-        #print("\nCurrent Learning Rate: ", round(scheduler.get_last_lr()[0], 4), "\n")
+        scheduler.step(train_results[0])
+        print("\nCurrent Learning Rate: ", round(scheduler.get_last_lr()[0], 4), "\n")
 
         # Checkpoint
         torch.save({
@@ -250,11 +291,16 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
             'scheduler_state_dict': scheduler.state_dict(),
             'train_losses': train_losses,
+            'train_acc': train_acc,
+            'train_top5_acc': train_top5_acc,
+            'validation_losses': validation_losses,
+            'validation_acc': validation_acc,
+            'validation_top5_acc': validation_top5_acc,
         }, CHECKPOINT_PATH)
 
     pbar_inside_epoch.close()
 
-    save_model(model, optimizer, params["epoch_num"], train_losses)
+    save_model(model, train_losses, train_acc, train_top5_acc, validation_losses, validation_acc, validation_top5_acc)
 
 
 if __name__ == '__main__':

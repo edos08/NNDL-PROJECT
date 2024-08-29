@@ -3,7 +3,6 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple, Optional
 from torchvision.datasets import DatasetFolder, VisionDataset
-from torchvision import datasets
 
 IMG_EXTENSIONS = (".jpg", ".jpeg", ".png", ".ppm", ".bmp", ".pgm", ".tif", ".tiff", ".webp")
 
@@ -30,6 +29,54 @@ def read_file(file_path: str) -> List[str]:
         lines = [line.strip() for line in file.readlines()]
     return lines
 
+
+# Extracts data from the survaillance file
+def split_sv_data(path):
+    lines = read_file(path)
+    sv_data = []
+    for line in lines:
+        parts = line.split('\t')
+
+        make = parts[0].strip("'")
+        model = parts[1].strip("'")
+        year = int(parts[2])
+
+        sv_data.append([make, model, year])
+
+    return sv_data
+
+
+# Matches the class key of training dataset to the actual make or model name
+# len is 163 - total number of car make classes
+def match_class_to_name(path, dictionary, make_model):
+    matches = dict()
+    lines = read_file(path)
+
+    for key in dictionary:
+        if make_model == 0:
+            matches[key] = lines[int(key)-1]
+        elif make_model == 1:
+            value = key.split(os.sep)
+            matches[key] = lines[int(value[1]) - 1]
+
+    return matches
+
+
+# Finds classes present inside surveillance data file
+# len is 69 - car make classes in sv data
+def match_classes(train_dict, sv_data, make_model):
+    sv_classes = []
+    sv_dict = {}
+    for data in sv_data:
+        if data[make_model] not in sv_classes:
+            sv_classes.append(data[make_model])
+
+    for key in train_dict:
+        value = train_dict[key].strip("'")
+        if value in sv_classes:
+            sv_dict[key] = value
+
+    return sv_dict
 
 class ImagesFromTextFile(VisionDataset):
 
@@ -92,7 +139,7 @@ class ImagesFromTextFile(VisionDataset):
             root: str | Path,
             txt_file: str | Path,
             class_to_idx: Dict[str, int]
-    ) -> Any:
+    ) -> List[Tuple[str, int, int]]:
         instances = []
 
         lines = read_file(txt_file)
@@ -205,32 +252,116 @@ class WrapperDataset:
     def __len__(self):
         return len(self.dataset)
     
+class CustomDataset(VisionDataset):
+    def __init__(self, root, transform=None, target_transform=None):
+        super().__init__(root, transform=transform, target_transform=target_transform)
 
-class CIFAR10Instance(datasets.CIFAR10):
-    """CIFAR10Instance Dataset.
-    """
+class TestImagesFromTextFile(CustomDataset):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self,
+                 root: str | Path = None,
+                 txt_file: str | Path = None,
+                 sv_data_txt: str | Path = None,
+                 train_class_to_idx: Dict = None,
+                 matches: Dict = None,
+                 transform: Callable[..., Any] | None = None,
+                 target_transform: Callable[..., Any] | None = None,
+                 loader: Callable[[str], Any] = pil_loader,
+                 hierarchy: int = 0,
+                 ) -> None:
+        self.hierarchy = hierarchy
+        self.train_class_to_idx = train_class_to_idx
+        self.matches = matches
+        super().__init__(
+            root,
+            transform=transform,
+            target_transform=target_transform)
 
-        super(CIFAR10Instance, self).__init__(*args, **kwargs)
-        self.labels = self.targets
+        classes, sub_classes, class_to_idx, sub_class_idx = self.find_classes(sv_data_txt)
+        self.classes = classes
+        self.class_to_idx = class_to_idx
+        self.sub_classes = sub_classes
+        self.sub_class_idx = sub_class_idx
 
-    def __getitem__(self, index):
+        self.loader = loader
+        samples = self.make_dataset(self.root, txt_file, class_to_idx)
+        self.samples = samples
+        self.targets = [s[1] for s in samples]
 
-        img, target = self.data[index], self.targets[index]
 
-        img = Image.fromarray(img)
+    def find_classes(self, directory: str | Path) -> Tuple[List[str], List[str], Dict[str, int], List[str]]:
+        classes = []
+        sub_classes = []
 
+        lines = read_file(directory)
+        for line in lines:
+            parts = line.split('\t')
+
+            if self.hierarchy == 0:
+                make = parts[0].strip("'")
+                sub_classes.append(make)
+                if make not in classes:
+                    classes.append(make)
+                classes.sort()
+
+            elif self.hierarchy == 1:
+                model = parts[1].strip("'")
+                sub_classes.append(model)
+                if model not in classes:
+                    classes.append(model)
+                classes.sort()
+
+        class_to_idx = {}
+        sub_class_idx = []
+        for key in self.matches:
+            if key in self.train_class_to_idx:
+                class_to_idx[key] = self.train_class_to_idx[key]
+
+
+        for sub_class in sub_classes:
+            for key in self.matches:
+                value = self.matches[key]
+                if sub_class == value:
+                    sub_class_idx.append(key)
+
+
+        return classes, sub_classes, class_to_idx, sub_class_idx
+
+
+    def make_dataset(
+            self,
+            root: str | Path,
+            txt_file: str | Path,
+            class_to_idx: Dict[str, int]
+            ) -> List[Tuple[str, int]]:
+        
+        instances = []
+        
+        lines = read_file(txt_file)
+
+
+        for line in lines:
+            line_parts = line.split('/')
+            temp = line_parts[0]
+            target_class = self.sub_class_idx[int(temp)-1]
+            class_index = class_to_idx[target_class]
+            path = os.path.join(root, line)
+
+            item = path, class_index
+            instances.append(item)
+
+        return instances
+
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
+
+        path, target = self.samples[index]
+        sample = self.loader(path)
         if self.transform is not None:
-            img1 = self.transform(img)
-            # if self.train:
-            #     img2 = self.transform(img)
-
+            sample = self.transform(sample)
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        # if self.train:
-        #
-        #     return [img1, img2], target, index
+        return sample, target
 
-        return img1, target, index
+    def __len__(self) -> int:
+        return len(self.samples)

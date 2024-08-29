@@ -4,8 +4,8 @@ import numpy as np
 import time
 import math
 from torch.utils.data import DataLoader
-from tqdm.contrib.telegram import tqdm
-from resnet import ResNet
+from tqdm import tqdm
+from models.resnet import ResNet
 
 
 class MoCo(nn.Module):
@@ -94,6 +94,12 @@ class MoCo(nn.Module):
 
         self.queue_ptr[0] = ptr
 
+    def init_label_information(self, index, label):
+        self._init_label_information(index, label)
+
+    def show_label_information(self):
+        self._show_label_information()
+
     def forward(self, im_q, im_k, index):
         """
         Input:
@@ -139,13 +145,17 @@ def train(train_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss
     Train a model on the provided training dataset
 
     Args:
-         train_loader (DataLoader): training dataset
-         model (nn.Module): model to train
-         epoch (int): the current epoch
-         criterion (nn.modules.loss): loss function
-         optimizer (torch.optim): optimizer for the model
-         device (torch.device): the device to load the model
-         pbar (tqdm): tqdm progress bar
+        train_loader (DataLoader): training dataset
+        model (nn.Module): model to train
+        epoch (int): the current epoch
+        criterion (nn.modules.loss): loss function
+        optimizer (torch.optim): optimizer for the model
+        device (torch.device): the device to load the model
+        pbar (tqdm): tqdm progress bar
+        total_epochs (int): total number of epochs
+        lr (float): learning rate
+        warm_up (int): number of warm-up epochs
+        batch_size (int): batch size
     """
 
     model.train()

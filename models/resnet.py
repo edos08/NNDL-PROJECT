@@ -5,8 +5,8 @@ import numpy as np
 import torch.nn as nn
 
 from torch.utils.data import DataLoader
-# from sklearn.metrics import accuracy_score # using custom score function
-from tqdm.notebook import tqdm
+from tqdm.notebook import tqdm as tqdm_notebook
+from tqdm import tqdm
 
 
 class ConvolutionalModel(nn.Module):
@@ -243,7 +243,7 @@ def top_k_accuracy(target, predicted, k=5):
 
 
 def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, optimizer: torch.optim,
-          device, pbar: tqdm = None) -> tuple:
+          device, pbar: tqdm = None, pbar_notebook: tqdm_notebook = None) -> tuple:
     """
     Train a model on the provided training dataset
 
@@ -255,6 +255,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
          optimizer (torch.optim): optimizer for the model
          device (torch.device): the device to load the model
          pbar (tqdm): tqdm progress bar
+         pbar_notebook (tqdm): tqdm progress bar for notebook
     """
 
     model.train()
@@ -264,7 +265,7 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     epoch_acc, epoch_top5_acc = np.array([]), np.array([])
 
     for batch in train_loader:
-        images, labels = batch
+        images, labels, _ = batch
 
         # GPU casting
         images = images.to(device)
@@ -291,6 +292,9 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
         if pbar is not None:
             pbar.update(1)
 
+        if pbar_notebook is not None:
+            pbar_notebook.update(1)
+
     epoch_loss_mean = epoch_loss.mean()
     epoch_loss_std = epoch_loss.std()
     epoch_acc = epoch_acc.mean()
@@ -299,23 +303,19 @@ def train(train_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.
     end = time.time()
 
     print("\n-- TRAINING --")
-    print("Epoch: {}\n "
-          "- Loss: {:.3f} +- {:.3f}\n "
-          "- Top-1-Accuracy: {:.2f}\n "
-          "- Top-5-Accuracy: {:.2f}\n "
-          "- Time: {:.2f}s".format(
-        epoch + 1,
-        epoch_loss_mean,
-        epoch_loss_std,
-        epoch_acc,
-        epoch_top5_acc,
-        end - start))
+    print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(
+            epoch + 1,
+            epoch_loss_mean,
+            epoch_loss_std,
+            epoch_acc,
+            epoch_top5_acc,
+            end - start))
 
     return epoch_loss_mean, epoch_acc, epoch_top5_acc
 
 
 def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criterion: nn.modules.loss, device,
-             pbar: tqdm = None) -> tuple:
+             pbar: tqdm = None, pbar_notebook: tqdm_notebook = None) -> tuple:
     """
     Valid a model on the provided validation dataset
 
@@ -326,6 +326,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
         criterion (torch.nn.modules.loss): loss function
         device (torch.device): the device to load the model
         pbar (tqdm): tqdm progress bar
+        pbar_notebook (tqdm): tqdm progress bar for notebook
     """
 
     model.eval()
@@ -336,7 +337,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
 
     with torch.no_grad():
         for batch in validation_loader:
-            image, label = batch
+            image, label, _ = batch
 
             # Casting to GPU
             image = image.to(device)
@@ -357,6 +358,9 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
             if pbar is not None:
                 pbar.update(1)
 
+            if pbar_notebook is not None:
+                pbar_notebook.update(1)
+
         epoch_loss_mean = epoch_loss.mean()
         epoch_loss_std = epoch_loss.std()
         epoch_acc = epoch_acc.mean()
@@ -365,12 +369,7 @@ def validate(validation_loader: DataLoader, model: nn.Module, epoch: int, criter
         end = time.time()
 
         print("\n-- VALIDATION --")
-        print(
-            "Epoch: {}\n "
-            "- Loss: {:.3f} +- {:.3f}\n "
-            "- Top-1-Accuracy: {:.2f}\n "
-            "- Top-5-Accuracy: {:.2f}\n "
-            "- Time: {:.2f}s".format(
+        print("Epoch: {}\n - Loss: {:.3f} +- {:.3f}\n - Top-1-Accuracy: {:.2f}\n - Top-5-Accuracy: {:.2f}\n - Time: {:.2f}s".format(
                 epoch + 1,
                 epoch_loss_mean,
                 epoch_loss_std,
@@ -399,7 +398,7 @@ def test(test_loader: DataLoader, model: nn.Module, criterion: nn.modules.loss, 
 
     with torch.no_grad():
         for batch in test_loader:
-            image, label = batch
+            image, label, _ = batch
 
             # Casting to GPU
             image = image.to(device)
