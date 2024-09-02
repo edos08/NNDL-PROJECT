@@ -26,7 +26,7 @@ This repository contains the principal code for a cars classification project, p
 
 - **others/cars_classification.py:** A Python script containing a script version of the Jupyter Notebook.
 
-- **trained_models:** This folder contains pre-trained model weights saved in .pth files. These files store the learned parameters of various neural network architectures.
+- **trained_models:** This folder contains pre-trained model weights saved in .pth files. These files store the learned parameters of various neural network architectures. (Now contains a link to download the pre-trained models).
 
 - **requirements.txt:** A file listing the necessary libraries and their versions. To install the required dependencies, run:
   ```
